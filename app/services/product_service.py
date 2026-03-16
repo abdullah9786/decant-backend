@@ -30,6 +30,9 @@ class ProductService:
             query["$or"] = [
                 {"name": {"$regex": search, "$options": "i"}},
                 {"brand": {"$regex": search, "$options": "i"}},
+                {"notes_top": {"$regex": search, "$options": "i"}},
+                {"notes_middle": {"$regex": search, "$options": "i"}},
+                {"notes_base": {"$regex": search, "$options": "i"}},
             ]
         cursor = self.collection.find(query)
         if sort_by == "newest":
