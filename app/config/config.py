@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     ZEPTO_FROM_EMAIL: str = os.getenv("ZEPTO_FROM_EMAIL", "")
     ZEPTO_FROM_NAME: str = os.getenv("ZEPTO_FROM_NAME", "SCENTS")
 
+
     class Config:
         case_sensitive = True
         env_file = ".env"
