@@ -7,7 +7,6 @@ from bson import ObjectId
 class DecantVariant(BaseModel):
     size_ml: int
     price: float
-    stock: int
 
 class ProductBase(BaseModel):
     name: str
@@ -17,6 +16,8 @@ class ProductBase(BaseModel):
     image_url: Optional[str] = None
     images: List[str] = []
     variants: List[DecantVariant]
+    stock_ml: int = 0
+    sort_order: int = 0
     is_featured: bool = False
     is_new_arrival: bool = False
     notes_top: List[str] = []
@@ -37,6 +38,8 @@ class ProductUpdate(BaseModel):
     image_url: Optional[str] = None
     images: Optional[List[str]] = None
     variants: Optional[List[DecantVariant]] = None
+    stock_ml: Optional[int] = None
+    sort_order: Optional[int] = None
     is_featured: Optional[bool] = None
     is_new_arrival: Optional[bool] = None
     notes_top: Optional[List[str]] = None

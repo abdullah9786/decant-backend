@@ -15,7 +15,10 @@ async def create_order(order_in: OrderCreate, db=Depends(get_database), current_
         order_in.user_id = str(current_user["_id"])
         order_in.customer_name = order_in.customer_name or current_user.get("full_name")
         order_in.customer_email = order_in.customer_email or current_user.get("email")
-    return await order_service.create(order_in)
+    try:
+        return await order_service.create(order_in)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 @router.get("/", response_model=List[OrderOut])
 async def get_orders(user_id: Optional[str] = None, db=Depends(get_database), current_user=Depends(get_current_user)):

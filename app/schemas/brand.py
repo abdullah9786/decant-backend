@@ -9,6 +9,7 @@ class BrandBase(BaseModel):
     name: str
     description: Optional[str] = None
     image_url: Optional[str] = None
+    sort_order: int = 0
 
 
 class BrandCreate(BrandBase):
@@ -19,6 +20,7 @@ class BrandUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     image_url: Optional[str] = None
+    sort_order: Optional[int] = None
 
 
 class BrandOut(BrandBase):

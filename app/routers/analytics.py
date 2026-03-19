@@ -24,7 +24,7 @@ async def get_stats(db: AsyncIOMotorDatabase = Depends(get_database), _admin=Dep
     
     # Low stock
     low_stock_count = await db["products"].count_documents({
-        "variants.stock": {"$lt": 10}
+        "stock_ml": {"$lt": 50}
     })
     
     # 2. Daily Sales & Orders (Last 7 days)

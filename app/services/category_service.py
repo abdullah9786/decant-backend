@@ -8,7 +8,7 @@ class CategoryService:
         self.collection = db["categories"]
 
     async def get_all(self):
-        cursor = self.collection.find({})
+        cursor = self.collection.find({}).sort([("sort_order", 1), ("name", 1)])
         return await cursor.to_list(length=100)
 
     async def get_by_id(self, category_id: str):

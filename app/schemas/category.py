@@ -10,6 +10,7 @@ class CategoryBase(BaseModel):
     icon: Optional[str] = None # Lucide icon name or emoji
     image_url: Optional[str] = None
     is_featured: bool = False
+    sort_order: int = 0
 
 class CategoryCreate(CategoryBase):
     pass
@@ -20,6 +21,7 @@ class CategoryUpdate(BaseModel):
     icon: Optional[str] = None
     image_url: Optional[str] = None
     is_featured: Optional[bool] = None
+    sort_order: Optional[int] = None
 
 class CategoryOut(CategoryBase):
     id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")

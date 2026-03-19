@@ -9,7 +9,7 @@ class BrandService:
         self.collection = db["brands"]
 
     async def get_all(self):
-        cursor = self.collection.find({}).sort("name", 1)
+        cursor = self.collection.find({}).sort([("sort_order", 1), ("name", 1)])
         return await cursor.to_list(length=200)
 
     async def get_by_id(self, brand_id: str):

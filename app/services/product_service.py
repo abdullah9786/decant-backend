@@ -37,10 +37,17 @@ class ProductService:
         cursor = self.collection.find(query)
         if sort_by == "newest":
             cursor = cursor.sort("created_at", -1)
-        return await cursor.to_list(length=100)
+        else:
+            cursor = cursor.sort([("sort_order", 1), ("created_at", -1)])
+        products = await cursor.to_list(length=100)
+        normalized = []
+        for product in products:
+            normalized.append(await self._ensure_stock_ml(product))
+        return normalized
 
     async def get_by_id(self, product_id: str):
-        return await self.collection.find_one({"_id": ObjectId(product_id)})
+        product = await self.collection.find_one({"_id": ObjectId(product_id)})
+        return await self._ensure_stock_ml(product)
 
     async def create(self, product_in: ProductCreate):
         product_dict = product_in.dict()
@@ -57,3 +64,21 @@ class ProductService:
 
     async def delete(self, product_id: str):
         return await self.collection.delete_one({"_id": ObjectId(product_id)})
+
+    async def _ensure_stock_ml(self, product: Optional[dict]):
+        if not product:
+            return product
+        if product.get("stock_ml") is None:
+            variants = product.get("variants", [])
+            computed = 0
+            for v in variants:
+                try:
+                    computed += int(v.get("size_ml", 0)) * int(v.get("stock", 0))
+                except Exception:
+                    continue
+            product["stock_ml"] = computed
+            await self.collection.update_one(
+                {"_id": product["_id"]},
+                {"$set": {"stock_ml": computed}},
+            )
+        return product
