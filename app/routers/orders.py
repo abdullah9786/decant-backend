@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, status, HTTPException
+from datetime import datetime
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
 from app.schemas.order import OrderCreate, OrderUpdate, OrderOut, OrderTrackOut
@@ -122,10 +123,9 @@ async def verify_payment(data: PaymentVerifyRequest, db=Depends(get_database)):
             raise HTTPException(status_code=404, detail="Order not found for this payment")
             
     except Exception as e:
-        print(f"Signature Verification Failed: {str(e)}")
         # Log failure
         order = await db["orders"].find_one({"payment_details.razorpay_order_id": data.razorpay_order_id})
         if order:
             await order_service.update(str(order["_id"]), OrderUpdate(payment_status="failed"))
             
-        raise HTTPException(status_code=400, detail="Payment verification failed")
+        raise HTTPException(status_code=400, detail=f"Payment verification failed: {str(e)}")
