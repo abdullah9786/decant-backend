@@ -19,7 +19,9 @@ class Settings(BaseSettings):
         "http://127.0.0.1:3000",
         "http://127.0.0.1:3001",
         "https://decant-user.vercel.app",
-        "https://decant-admin-stage.vercel.app"
+        "https://decant-admin-stage.vercel.app",
+        "https://admin.decume.in"
+        "https://decume.in"
     ]
 
     # Email verification (ZeptoMail)
