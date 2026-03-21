@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from datetime import datetime
 from .user import PyObjectId
 from bson import ObjectId
@@ -21,6 +21,7 @@ class OrderBase(BaseModel):
     status: str = "pending"
     shipping_address: str
     payment_status: str = "pending"
+    payment_details: Optional[Dict[str, Any]] = None
 
 class OrderCreate(OrderBase):
     pass
@@ -29,6 +30,7 @@ class OrderUpdate(BaseModel):
     status: Optional[str] = None
     payment_status: Optional[str] = None
     items: Optional[List[OrderItem]] = None
+    payment_details: Optional[Dict[str, Any]] = None
 
 class OrderOut(OrderBase):
     id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")

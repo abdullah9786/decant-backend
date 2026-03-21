@@ -3,11 +3,32 @@ from app.schemas.order import OrderCreate, OrderUpdate
 from bson import ObjectId
 from typing import List
 from datetime import datetime
+import razorpay
+from app.config.config import settings
 
 class OrderService:
     def __init__(self, db: AsyncIOMotorDatabase):
         self.collection = db["orders"]
         self.products = db["products"]
+        self.client = razorpay.Client(auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET))
+
+    async def create_razorpay_order(self, amount: float, order_id: str):
+        """
+        Create a Razorpay order. Amount should be in INR.
+        Razorpay expects amount in paise (1 INR = 100 paise).
+        """
+        data = {
+            "amount": int(amount * 100),
+            "currency": "INR",
+            "receipt": order_id,
+            "payment_capture": 1
+        }
+        try:
+            razorpay_order = self.client.order.create(data=data)
+            return razorpay_order
+        except Exception as e:
+            print(f"Razorpay Order Error: {str(e)}")
+            raise ValueError(f"Could not create Razorpay order: {str(e)}")
 
     async def create(self, order_in: OrderCreate):
         order_dict = order_in.dict()

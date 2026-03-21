@@ -28,8 +28,10 @@ class Settings(BaseSettings):
     ZEPTO_API_KEY: str = os.getenv("ZEPTO_API_KEY", "").strip()
     ZEPTO_FROM_EMAIL: str = os.getenv("ZEPTO_FROM_EMAIL", "")
     ZEPTO_FROM_NAME: str = os.getenv("ZEPTO_FROM_NAME", "SCENTS")
-
-
+    
+    # Razorpay Payment Gateway
+    RAZORPAY_KEY_ID: str = os.getenv("RAZORPAY_KEY_ID", "")
+    RAZORPAY_KEY_SECRET: str = os.getenv("RAZORPAY_KEY_SECRET", "")
     class Config:
         case_sensitive = True
         env_file = ".env"
