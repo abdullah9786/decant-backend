@@ -5,12 +5,14 @@ from typing import List
 from datetime import datetime
 import razorpay
 from app.config.config import settings
+from app.services.mail_service import MailService
 
 class OrderService:
     def __init__(self, db: AsyncIOMotorDatabase):
         self.collection = db["orders"]
         self.products = db["products"]
         self.client = razorpay.Client(auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET))
+        self.mail_service = MailService()
 
     async def create_razorpay_order(self, amount: float, order_id: str):
         """
@@ -49,11 +51,25 @@ class OrderService:
         return await self.collection.find_one({"_id": ObjectId(order_id)})
 
     async def update(self, order_id: str, order_in: OrderUpdate):
+        # Detect status change for email
+        old_order = await self.get_by_id(order_id)
+        
         update_data = {k: v for k, v in order_in.dict(exclude_unset=True).items()}
         await self.collection.update_one(
             {"_id": ObjectId(order_id)}, {"$set": update_data}
         )
-        return await self.get_by_id(order_id)
+        
+        updated_order = await self.get_by_id(order_id)
+        
+        # If status changed to delivered, send email
+        if updated_order and updated_order.get("status") == "delivered" and old_order.get("status") != "delivered":
+            await self.mail_service.send_delivery_notification(
+                updated_order.get("customer_email"),
+                updated_order.get("customer_name"),
+                order_id
+            )
+            
+        return updated_order
 
     async def _decrement_stock(self, items: List[dict]):
         for item in items:

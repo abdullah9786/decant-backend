@@ -7,6 +7,7 @@ from app.services.order_service import OrderService
 from app.db.mongodb import get_database
 from app.utils.deps import get_current_user, get_current_user_optional, require_admin
 from app.services.auth_service import AuthService
+from app.services.mail_service import MailService
 
 router = APIRouter(prefix="/orders", tags=["orders"])
 
@@ -124,7 +125,23 @@ async def verify_and_create(
     
     # 3. Create Order (Stock will be checked and decremented here)
     try:
-        return await order_service.create(order_in)
+        new_order = await order_service.create(order_in)
+        
+        # 4. Trigger Notifications
+        mail_service = MailService()
+        try:
+            # Send to customer
+            await mail_service.send_order_confirmation(
+                new_order.get("customer_email"),
+                new_order.get("customer_name"),
+                new_order
+            )
+            # Alert admin
+            await mail_service.send_admin_new_order_alert(new_order)
+        except Exception as mail_err:
+            print(f"[MAIL] Async notification error (non-blocking): {mail_err}")
+            
+        return new_order
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
