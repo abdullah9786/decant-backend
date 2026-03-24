@@ -85,6 +85,7 @@ class CommissionOut(BaseModel):
     commission_amount: float
     status: str = "pending"
     payout_id: Optional[str] = None
+    cancellation_reason: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
     approved_at: Optional[datetime] = None
     paid_at: Optional[datetime] = None
@@ -100,6 +101,11 @@ class EarningsSummary(BaseModel):
     approved_earnings: float = 0.0
     paid_earnings: float = 0.0
     total_orders: int = 0
+
+
+class BulkCommissionIds(BaseModel):
+    commission_ids: List[str]
+    reason: Optional[str] = None
 
 
 class PayoutCreate(BaseModel):

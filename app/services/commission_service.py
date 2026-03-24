@@ -50,13 +50,16 @@ class CommissionService:
         )
         return await self.commissions.find_one({"_id": ObjectId(commission_id)})
 
-    async def cancel_commission(self, commission_id: str) -> dict | None:
+    async def cancel_commission(self, commission_id: str, reason: str | None = None) -> dict | None:
         c = await self.commissions.find_one({"_id": ObjectId(commission_id)})
         if not c or c["status"] not in ("pending", "approved"):
             return None
+        update: dict = {"status": "cancelled"}
+        if reason:
+            update["cancellation_reason"] = reason
         await self.commissions.update_one(
             {"_id": ObjectId(commission_id)},
-            {"$set": {"status": "cancelled"}},
+            {"$set": update},
         )
         return await self.commissions.find_one({"_id": ObjectId(commission_id)})
 
@@ -142,6 +145,86 @@ class CommissionService:
     async def get_payouts_by_influencer(self, influencer_id: str) -> list:
         cursor = self.payouts.find({"influencer_id": influencer_id}).sort("created_at", -1)
         return await cursor.to_list(length=100)
+
+    async def bulk_approve_all_pending(self) -> int:
+        """Approve all pending commissions at once. Returns count approved."""
+        result = await self.commissions.update_many(
+            {"status": "pending"},
+            {"$set": {"status": "approved", "approved_at": datetime.utcnow()}},
+        )
+        return result.modified_count
+
+    async def bulk_approve_by_ids(self, commission_ids: list[str]) -> int:
+        """Approve specific commissions by ID. Returns count approved."""
+        oids = [ObjectId(cid) for cid in commission_ids]
+        result = await self.commissions.update_many(
+            {"_id": {"$in": oids}, "status": "pending"},
+            {"$set": {"status": "approved", "approved_at": datetime.utcnow()}},
+        )
+        return result.modified_count
+
+    async def bulk_cancel_by_ids(self, commission_ids: list[str], reason: str | None = None) -> int:
+        """Cancel specific commissions by ID. Returns count cancelled."""
+        oids = [ObjectId(cid) for cid in commission_ids]
+        update: dict = {"status": "cancelled"}
+        if reason:
+            update["cancellation_reason"] = reason
+        result = await self.commissions.update_many(
+            {"_id": {"$in": oids}, "status": {"$in": ["pending", "approved"]}},
+            {"$set": update},
+        )
+        return result.modified_count
+
+    async def bulk_create_payouts(self, method: str = "upi") -> list:
+        """Create payouts for every influencer that has approved commissions."""
+        pipeline = [
+            {"$match": {"status": "approved"}},
+            {"$group": {
+                "_id": "$influencer_id",
+                "total": {"$sum": "$commission_amount"},
+                "commission_ids": {"$push": {"$toString": "$_id"}},
+            }},
+        ]
+        groups = []
+        async for doc in self.commissions.aggregate(pipeline):
+            groups.append(doc)
+
+        created_payouts = []
+        for g in groups:
+            influencer_id = g["_id"]
+            amount = round(g["total"], 2)
+            commission_ids = g["commission_ids"]
+
+            payout_doc = {
+                "influencer_id": influencer_id,
+                "amount": amount,
+                "commission_ids": commission_ids,
+                "method": method,
+                "status": "pending",
+                "scheduled_date": datetime.utcnow(),
+                "completed_at": None,
+                "created_at": datetime.utcnow(),
+            }
+            result = await self.payouts.insert_one(payout_doc)
+            payout_id = str(result.inserted_id)
+
+            await self.commissions.update_many(
+                {"_id": {"$in": [ObjectId(cid) for cid in commission_ids]}},
+                {"$set": {"status": "paid", "payout_id": payout_id, "paid_at": datetime.utcnow()}},
+            )
+
+            payout = await self.payouts.find_one({"_id": result.inserted_id})
+            created_payouts.append(payout)
+
+        return created_payouts
+
+    async def bulk_complete_payouts(self, influencer_id: str) -> int:
+        """Complete all pending payouts for a given influencer. Returns count completed."""
+        result = await self.payouts.update_many(
+            {"influencer_id": influencer_id, "status": "pending"},
+            {"$set": {"status": "completed", "completed_at": datetime.utcnow()}},
+        )
+        return result.modified_count
 
     async def get_all_commissions(self, status_filter: Optional[str] = None) -> list:
         query = {}

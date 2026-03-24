@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from typing import List, Optional
 from app.schemas.influencer import (
     InfluencerProfileCreate, InfluencerProfileUpdate, InfluencerProfileOut,
     SectionCreate, SectionUpdate, SectionReorder, SectionOut,
-    CommissionOut, EarningsSummary, PayoutCreate, PayoutOut,
+    CommissionOut, EarningsSummary, BulkCommissionIds, PayoutCreate, PayoutOut,
 )
 from app.schemas.coupon import CouponCreate, CouponUpdate, CouponOut, CouponApplyRequest, CouponApplyResponse
 from app.services.influencer_service import InfluencerService
@@ -221,17 +222,79 @@ async def admin_approve_commission(
     return c
 
 
+class CancelCommissionBody(BaseModel):
+    reason: Optional[str] = None
+
+
 @router.put("/admin/commissions/{commission_id}/cancel", response_model=CommissionOut)
 async def admin_cancel_commission(
     commission_id: str,
+    body: CancelCommissionBody = CancelCommissionBody(),
     db=Depends(get_database),
     _admin=Depends(require_admin),
 ):
     csvc = CommissionService(db)
-    c = await csvc.cancel_commission(commission_id)
+    c = await csvc.cancel_commission(commission_id, body.reason)
     if not c:
         raise HTTPException(status_code=400, detail="Cannot cancel this commission")
     return c
+
+
+@router.put("/admin/commissions/bulk-approve")
+async def admin_bulk_approve_commissions(
+    db=Depends(get_database),
+    _admin=Depends(require_admin),
+):
+    csvc = CommissionService(db)
+    count = await csvc.bulk_approve_all_pending()
+    return {"approved_count": count}
+
+
+@router.put("/admin/commissions/bulk-approve-selected")
+async def admin_bulk_approve_selected(
+    data: BulkCommissionIds,
+    db=Depends(get_database),
+    _admin=Depends(require_admin),
+):
+    csvc = CommissionService(db)
+    count = await csvc.bulk_approve_by_ids(data.commission_ids)
+    return {"approved_count": count}
+
+
+@router.put("/admin/commissions/bulk-cancel-selected")
+async def admin_bulk_cancel_selected(
+    data: BulkCommissionIds,
+    db=Depends(get_database),
+    _admin=Depends(require_admin),
+):
+    csvc = CommissionService(db)
+    count = await csvc.bulk_cancel_by_ids(data.commission_ids, data.reason)
+    return {"cancelled_count": count}
+
+
+@router.post("/admin/payouts/bulk", response_model=List[PayoutOut])
+async def admin_bulk_create_payouts(
+    db=Depends(get_database),
+    _admin=Depends(require_admin),
+):
+    csvc = CommissionService(db)
+    payouts = await csvc.bulk_create_payouts()
+    if not payouts:
+        raise HTTPException(status_code=400, detail="No approved commissions to pay out")
+    return payouts
+
+
+@router.put("/admin/payouts/{influencer_id}/bulk-complete")
+async def admin_bulk_complete_payouts(
+    influencer_id: str,
+    db=Depends(get_database),
+    _admin=Depends(require_admin),
+):
+    csvc = CommissionService(db)
+    count = await csvc.bulk_complete_payouts(influencer_id)
+    if count == 0:
+        raise HTTPException(status_code=400, detail="No pending payouts to complete")
+    return {"completed_count": count}
 
 
 @router.post("/admin/payouts", response_model=PayoutOut)
