@@ -22,9 +22,10 @@ class Settings(BaseSettings):
         "http://127.0.0.1:3002",
         "https://decant-user.vercel.app",
         "https://decant-admin-stage.vercel.app",
+        "https://decant-influencer-stage.vercel.app/",
         "https://admin.decume.in",
         "https://decume.in",
-        "https://influencer.decume.in"
+        "https://my.decume.in"
     ]
 
     # Email verification (ZeptoMail)
