@@ -49,12 +49,18 @@ class InfluencerProfileOut(InfluencerProfileBase):
 
 class SectionCreate(BaseModel):
     title: str
+    section_type: str = "products"
     product_ids: List[str] = []
+    brand_names: List[str] = []
+    note_names: List[str] = []
 
 
 class SectionUpdate(BaseModel):
     title: Optional[str] = None
+    section_type: Optional[str] = None
     product_ids: Optional[List[str]] = None
+    brand_names: Optional[List[str]] = None
+    note_names: Optional[List[str]] = None
     is_active: Optional[bool] = None
 
 
@@ -66,7 +72,10 @@ class SectionOut(BaseModel):
     id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
     influencer_id: str
     title: str
+    section_type: str = "products"
     product_ids: List[str] = []
+    brand_names: List[str] = []
+    note_names: List[str] = []
     sort_order: int = 0
     is_active: bool = True
     created_at: datetime = Field(default_factory=datetime.utcnow)

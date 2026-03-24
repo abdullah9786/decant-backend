@@ -24,6 +24,7 @@ class InfluencerService:
         self.sections = db["influencer_sections"]
         self.users = db["users"]
         self.products = db["products"]
+        self.brands = db["brands"]
 
     # ── Profile CRUD ──────────────────────────────────────────────
 
@@ -120,7 +121,10 @@ class InfluencerService:
         doc = {
             "influencer_id": influencer_id,
             "title": data.title,
+            "section_type": data.section_type,
             "product_ids": data.product_ids,
+            "brand_names": data.brand_names,
+            "note_names": data.note_names,
             "sort_order": next_order,
             "is_active": True,
             "created_at": datetime.utcnow(),
@@ -177,9 +181,15 @@ class InfluencerService:
         sections = await self.get_sections(str(profile["_id"]), active_only=True)
 
         all_product_ids = set()
+        all_brand_names = set()
         for s in sections:
-            for pid in s.get("product_ids", []):
-                all_product_ids.add(pid)
+            s_type = s.get("section_type", "products")
+            if s_type == "products":
+                for pid in s.get("product_ids", []):
+                    all_product_ids.add(pid)
+            elif s_type == "brands":
+                for bn in s.get("brand_names", []):
+                    all_brand_names.add(bn)
 
         products_map = {}
         if all_product_ids:
@@ -188,20 +198,47 @@ class InfluencerService:
             async for p in cursor:
                 products_map[str(p["_id"])] = p
 
+        brands_map = {}
+        if all_brand_names:
+            cursor = self.brands.find({"name": {"$in": list(all_brand_names)}})
+            async for b in cursor:
+                brands_map[b["name"]] = b
+
         enriched_sections = []
         for s in sections:
-            products = []
-            for pid in s.get("product_ids", []):
-                prod = products_map.get(pid)
-                if prod and prod.get("stock_ml", 0) > 0:
-                    prod["_id"] = str(prod["_id"])
-                    products.append(prod)
-            enriched_sections.append({
+            s_type = s.get("section_type", "products")
+            entry = {
                 "_id": str(s["_id"]),
                 "title": s["title"],
+                "section_type": s_type,
                 "sort_order": s["sort_order"],
-                "products": products,
-            })
+            }
+
+            if s_type == "products":
+                products = []
+                for pid in s.get("product_ids", []):
+                    prod = products_map.get(pid)
+                    if prod and prod.get("stock_ml", 0) > 0:
+                        prod["_id"] = str(prod["_id"])
+                        products.append(prod)
+                entry["products"] = products
+            elif s_type == "brands":
+                brands_list = []
+                for bn in s.get("brand_names", []):
+                    brand = brands_map.get(bn)
+                    if brand:
+                        brands_list.append({
+                            "_id": str(brand["_id"]),
+                            "name": brand["name"],
+                            "image_url": brand.get("image_url", ""),
+                        })
+                    else:
+                        brands_list.append({"name": bn, "image_url": ""})
+                entry["brands"] = brands_list
+            elif s_type == "notes":
+                entry["notes"] = s.get("note_names", [])
+
+            enriched_sections.append(entry)
 
         profile["_id"] = str(profile["_id"])
         return {
