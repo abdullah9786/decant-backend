@@ -8,6 +8,8 @@ from app.db.mongodb import get_database
 from app.utils.deps import get_current_user, get_current_user_optional, require_admin
 from app.services.auth_service import AuthService
 from app.services.mail_service import MailService
+from app.services.commission_service import CommissionService
+from app.services.coupon_service import CouponService
 
 router = APIRouter(prefix="/orders", tags=["orders"])
 
@@ -68,7 +70,33 @@ async def get_order(id: str, db=Depends(get_database), current_user=Depends(get_
 @router.put("/{id}", response_model=OrderOut)
 async def update_order(id: str, order_in: OrderUpdate, db=Depends(get_database), _admin=Depends(require_admin)):
     order_service = OrderService(db)
-    return await order_service.update(id, order_in)
+    old_order = await order_service.get_by_id(id)
+    updated = await order_service.update(id, order_in)
+
+    if old_order and updated and old_order.get("influencer_id"):
+        try:
+            csvc = CommissionService(db)
+            old_status = old_order.get("status", "")
+            new_status = updated.get("status", "")
+
+            if new_status == "delivered" and old_status != "delivered":
+                comm = await db["commissions"].find_one({
+                    "order_id": str(old_order["_id"]), "status": "pending"
+                })
+                if comm:
+                    await csvc.approve_commission(str(comm["_id"]))
+
+            if new_status in ("cancelled", "refunded") and old_status not in ("cancelled", "refunded"):
+                comm = await db["commissions"].find_one({
+                    "order_id": str(old_order["_id"]),
+                    "status": {"$in": ["pending", "approved"]},
+                })
+                if comm:
+                    await csvc.cancel_commission(str(comm["_id"]))
+        except Exception as e:
+            print(f"[COMMISSION] Auto-update error (non-blocking): {e}")
+
+    return updated
 
 @router.post("/sync", status_code=status.HTTP_200_OK)
 async def sync_guest_orders(db=Depends(get_database), current_user=Depends(get_current_user)):
@@ -122,21 +150,49 @@ async def verify_and_create(
         "razorpay_signature": data.payment_details.razorpay_signature,
         "paid_at": datetime.utcnow().isoformat()
     }
+
+    # 2b. If a coupon code was provided, validate and attribute to influencer
+    if order_in.coupon_code and not order_in.influencer_id:
+        try:
+            coupon_svc = CouponService(db)
+            result = await coupon_svc.validate_coupon(order_in.coupon_code)
+            if result["valid"] and result["influencer_id"]:
+                order_in.influencer_id = result["influencer_id"]
+        except Exception:
+            pass
     
     # 3. Create Order (Stock will be checked and decremented here)
     try:
         new_order = await order_service.create(order_in)
         
-        # 4. Trigger Notifications
+        # 4. Create commission if order was referred by an influencer
+        if new_order.get("influencer_id"):
+            try:
+                csvc = CommissionService(db)
+                await csvc.create_commission(
+                    influencer_id=new_order["influencer_id"],
+                    order_id=str(new_order["_id"]),
+                    order_total=new_order.get("total_amount", 0),
+                    buyer_user_id=new_order.get("user_id"),
+                )
+            except Exception as comm_err:
+                print(f"[COMMISSION] Creation error (non-blocking): {comm_err}")
+
+        if new_order.get("coupon_code"):
+            try:
+                coupon_svc = CouponService(db)
+                await coupon_svc.use_coupon(new_order["coupon_code"])
+            except Exception:
+                pass
+
+        # 5. Trigger Notifications
         mail_service = MailService()
         try:
-            # Send to customer
             await mail_service.send_order_confirmation(
                 new_order.get("customer_email"),
                 new_order.get("customer_name"),
                 new_order
             )
-            # Alert admin
             await mail_service.send_admin_new_order_alert(new_order)
         except Exception as mail_err:
             print(f"[MAIL] Async notification error (non-blocking): {mail_err}")

@@ -22,6 +22,10 @@ class OrderBase(BaseModel):
     shipping_address: str
     payment_status: str = "pending"
     payment_details: Optional[Dict[str, Any]] = None
+    influencer_id: Optional[str] = None
+    referral_code: Optional[str] = None
+    coupon_code: Optional[str] = None
+    discount_amount: Optional[float] = None
 
 class OrderCreate(OrderBase):
     pass

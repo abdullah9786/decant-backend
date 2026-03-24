@@ -43,6 +43,7 @@ class UserBase(BaseModel):
     full_name: Optional[str] = None
     is_active: bool = True
     is_admin: bool = False
+    is_influencer: bool = False
 
 class UserCreate(UserBase):
     password: str

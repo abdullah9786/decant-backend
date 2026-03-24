@@ -16,12 +16,15 @@ class Settings(BaseSettings):
     BACKEND_CORS_ORIGINS: List[str] = [
         "http://localhost:3000",
         "http://localhost:3001",
+        "http://localhost:3002",
         "http://127.0.0.1:3000",
         "http://127.0.0.1:3001",
+        "http://127.0.0.1:3002",
         "https://decant-user.vercel.app",
         "https://decant-admin-stage.vercel.app",
         "https://admin.decume.in",
-        "https://decume.in"
+        "https://decume.in",
+        "https://influencer.decume.in"
     ]
 
     # Email verification (ZeptoMail)

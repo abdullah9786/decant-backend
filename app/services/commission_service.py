@@ -1,0 +1,151 @@
+from motor.motor_asyncio import AsyncIOMotorDatabase
+from bson import ObjectId
+from datetime import datetime
+from typing import Optional
+
+
+class CommissionService:
+    def __init__(self, db: AsyncIOMotorDatabase):
+        self.commissions = db["commissions"]
+        self.profiles = db["influencer_profiles"]
+        self.payouts = db["payouts"]
+
+    # ── Commission Lifecycle ──────────────────────────────────────
+
+    async def create_commission(
+        self, influencer_id: str, order_id: str, order_total: float,
+        buyer_user_id: Optional[str] = None,
+    ) -> dict | None:
+        profile = await self.profiles.find_one({"_id": ObjectId(influencer_id)})
+        if not profile:
+            return None
+
+        if buyer_user_id and profile.get("user_id") == buyer_user_id:
+            return None
+
+        rate = profile.get("commission_rate", 0.10)
+
+        doc = {
+            "influencer_id": influencer_id,
+            "order_id": order_id,
+            "order_total": order_total,
+            "commission_rate": rate,
+            "commission_amount": round(order_total * rate, 2),
+            "status": "pending",
+            "payout_id": None,
+            "created_at": datetime.utcnow(),
+            "approved_at": None,
+            "paid_at": None,
+        }
+        result = await self.commissions.insert_one(doc)
+        return await self.commissions.find_one({"_id": result.inserted_id})
+
+    async def approve_commission(self, commission_id: str) -> dict | None:
+        c = await self.commissions.find_one({"_id": ObjectId(commission_id)})
+        if not c or c["status"] != "pending":
+            return None
+        await self.commissions.update_one(
+            {"_id": ObjectId(commission_id)},
+            {"$set": {"status": "approved", "approved_at": datetime.utcnow()}},
+        )
+        return await self.commissions.find_one({"_id": ObjectId(commission_id)})
+
+    async def cancel_commission(self, commission_id: str) -> dict | None:
+        c = await self.commissions.find_one({"_id": ObjectId(commission_id)})
+        if not c or c["status"] not in ("pending", "approved"):
+            return None
+        await self.commissions.update_one(
+            {"_id": ObjectId(commission_id)},
+            {"$set": {"status": "cancelled"}},
+        )
+        return await self.commissions.find_one({"_id": ObjectId(commission_id)})
+
+    # ── Queries ───────────────────────────────────────────────────
+
+    async def get_commissions_by_influencer(
+        self, influencer_id: str, status_filter: Optional[str] = None
+    ) -> list:
+        query: dict = {"influencer_id": influencer_id}
+        if status_filter:
+            query["status"] = status_filter
+        cursor = self.commissions.find(query).sort("created_at", -1)
+        return await cursor.to_list(length=200)
+
+    async def get_earnings_summary(self, influencer_id: str) -> dict:
+        pipeline = [
+            {"$match": {"influencer_id": influencer_id}},
+            {"$group": {
+                "_id": "$status",
+                "total": {"$sum": "$commission_amount"},
+                "count": {"$sum": 1},
+            }},
+        ]
+        results = {}
+        async for doc in self.commissions.aggregate(pipeline):
+            results[doc["_id"]] = doc
+
+        total_orders = sum(r["count"] for r in results.values())
+        return {
+            "total_earnings": round(
+                sum(r["total"] for s, r in results.items() if s != "cancelled"), 2
+            ),
+            "pending_earnings": round(results.get("pending", {}).get("total", 0), 2),
+            "approved_earnings": round(results.get("approved", {}).get("total", 0), 2),
+            "paid_earnings": round(results.get("paid", {}).get("total", 0), 2),
+            "total_orders": total_orders,
+        }
+
+    # ── Payouts ───────────────────────────────────────────────────
+
+    async def create_payout(self, influencer_id: str, method: str = "upi") -> dict | None:
+        """Create a payout for all approved commissions (admin-triggered)."""
+        approved = await self.commissions.find(
+            {"influencer_id": influencer_id, "status": "approved"}
+        ).to_list(length=500)
+
+        if not approved:
+            return None
+
+        amount = round(sum(c["commission_amount"] for c in approved), 2)
+        commission_ids = [str(c["_id"]) for c in approved]
+
+        payout_doc = {
+            "influencer_id": influencer_id,
+            "amount": amount,
+            "commission_ids": commission_ids,
+            "method": method,
+            "status": "pending",
+            "scheduled_date": datetime.utcnow(),
+            "completed_at": None,
+            "created_at": datetime.utcnow(),
+        }
+        result = await self.payouts.insert_one(payout_doc)
+        payout_id = str(result.inserted_id)
+
+        await self.commissions.update_many(
+            {"_id": {"$in": [ObjectId(cid) for cid in commission_ids]}},
+            {"$set": {"status": "paid", "payout_id": payout_id, "paid_at": datetime.utcnow()}},
+        )
+
+        return await self.payouts.find_one({"_id": result.inserted_id})
+
+    async def complete_payout(self, payout_id: str) -> dict | None:
+        payout = await self.payouts.find_one({"_id": ObjectId(payout_id)})
+        if not payout or payout["status"] != "pending":
+            return None
+        await self.payouts.update_one(
+            {"_id": ObjectId(payout_id)},
+            {"$set": {"status": "completed", "completed_at": datetime.utcnow()}},
+        )
+        return await self.payouts.find_one({"_id": ObjectId(payout_id)})
+
+    async def get_payouts_by_influencer(self, influencer_id: str) -> list:
+        cursor = self.payouts.find({"influencer_id": influencer_id}).sort("created_at", -1)
+        return await cursor.to_list(length=100)
+
+    async def get_all_commissions(self, status_filter: Optional[str] = None) -> list:
+        query = {}
+        if status_filter:
+            query["status"] = status_filter
+        cursor = self.commissions.find(query).sort("created_at", -1)
+        return await cursor.to_list(length=500)
