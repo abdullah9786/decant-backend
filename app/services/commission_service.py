@@ -17,7 +17,7 @@ class CommissionService:
         buyer_user_id: Optional[str] = None,
     ) -> dict | None:
         profile = await self.profiles.find_one({"_id": ObjectId(influencer_id)})
-        if not profile:
+        if not profile or not profile.get("is_active", True):
             return None
 
         if buyer_user_id and profile.get("user_id") == buyer_user_id:
