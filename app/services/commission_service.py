@@ -60,7 +60,13 @@ class CommissionService:
         c = await self.commissions.find_one({"_id": ObjectId(commission_id)})
         if not c or c["status"] not in ("pending", "approved"):
             return None
-        update: dict = {"status": "cancelled"}
+        original = c.get("original_order_total") or c.get("order_total", 0)
+        update: dict = {
+            "status": "cancelled",
+            "original_order_total": round(original, 2),
+            "order_total": 0,
+            "commission_amount": 0,
+        }
         if reason:
             update["cancellation_reason"] = reason
         await self.commissions.update_one(

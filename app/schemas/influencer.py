@@ -90,6 +90,7 @@ class CommissionOut(BaseModel):
     influencer_id: str
     order_id: str
     order_total: float
+    original_order_total: Optional[float] = None
     commission_rate: float
     commission_amount: float
     status: str = "pending"

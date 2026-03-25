@@ -76,23 +76,47 @@ async def update_order(id: str, order_in: OrderUpdate, db=Depends(get_database),
     if old_order and updated and old_order.get("influencer_id"):
         try:
             csvc = CommissionService(db)
+            order_id_str = str(old_order["_id"])
             old_status = old_order.get("status", "")
             new_status = updated.get("status", "")
 
             if new_status == "delivered" and old_status != "delivered":
                 comm = await db["commissions"].find_one({
-                    "order_id": str(old_order["_id"]), "status": "pending"
+                    "order_id": order_id_str, "status": "pending"
                 })
                 if comm:
                     await csvc.approve_commission(str(comm["_id"]))
 
             if new_status in ("cancelled", "refunded") and old_status not in ("cancelled", "refunded"):
                 comm = await db["commissions"].find_one({
-                    "order_id": str(old_order["_id"]),
+                    "order_id": order_id_str,
                     "status": {"$in": ["pending", "approved"]},
                 })
                 if comm:
                     await csvc.cancel_commission(str(comm["_id"]))
+
+            # Recalculate commission when items change (partial cancellation)
+            if order_in.items is not None:
+                fulfilled_total = sum(
+                    i.get("price", 0) * i.get("quantity", 0)
+                    for i in updated.get("items", [])
+                    if i.get("status") != "cancelled"
+                )
+                comm = await db["commissions"].find_one({
+                    "order_id": order_id_str,
+                    "status": {"$in": ["pending", "approved"]},
+                })
+                if comm and fulfilled_total != comm.get("order_total", 0):
+                    original = comm.get("original_order_total") or comm.get("order_total", 0)
+                    rate = comm.get("commission_rate", 0.10)
+                    await db["commissions"].update_one(
+                        {"_id": comm["_id"]},
+                        {"$set": {
+                            "original_order_total": round(original, 2),
+                            "order_total": round(fulfilled_total, 2),
+                            "commission_amount": round(fulfilled_total * rate, 2),
+                        }},
+                    )
         except Exception as e:
             print(f"[COMMISSION] Auto-update error (non-blocking): {e}")
 
