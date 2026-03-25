@@ -15,10 +15,11 @@ async def get_products(
     is_new_arrival: Optional[bool] = None,
     q: Optional[str] = None,
     sort_by: Optional[str] = None,
+    include_inactive: bool = False,
     db=Depends(get_database)
 ):
     product_service = ProductService(db)
-    return await product_service.get_all(category, brand, is_featured, is_new_arrival, q, sort_by)
+    return await product_service.get_all(category, brand, is_featured, is_new_arrival, q, sort_by, include_inactive)
 
 @router.get("/{id}", response_model=ProductOut)
 async def get_product(id: str, db=Depends(get_database)):

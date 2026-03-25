@@ -20,6 +20,7 @@ class ProductBase(BaseModel):
     sort_order: int = 0
     is_featured: bool = False
     is_new_arrival: bool = False
+    is_active: bool = True
     notes_top: List[str] = []
     notes_middle: List[str] = []
     notes_base: List[str] = []
@@ -42,6 +43,7 @@ class ProductUpdate(BaseModel):
     sort_order: Optional[int] = None
     is_featured: Optional[bool] = None
     is_new_arrival: Optional[bool] = None
+    is_active: Optional[bool] = None
     notes_top: Optional[List[str]] = None
     notes_middle: Optional[List[str]] = None
     notes_base: Optional[List[str]] = None

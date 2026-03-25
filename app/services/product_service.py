@@ -16,8 +16,11 @@ class ProductService:
         is_new_arrival: Optional[bool] = None,
         search: Optional[str] = None,
         sort_by: Optional[str] = None,
+        include_inactive: bool = False,
     ):
-        query = {}
+        query: dict = {}
+        if not include_inactive:
+            query["is_active"] = {"$ne": False}
         if category:
             query["category"] = category
         if brand:

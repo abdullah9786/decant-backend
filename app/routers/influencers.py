@@ -167,6 +167,20 @@ async def admin_create_influencer(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.put("/{profile_id}", response_model=InfluencerProfileOut)
+async def admin_update_influencer(
+    profile_id: str,
+    data: InfluencerProfileUpdate,
+    db=Depends(get_database),
+    _admin=Depends(require_admin),
+):
+    svc = InfluencerService(db)
+    updated = await svc.update_profile(profile_id, data)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Influencer not found")
+    return updated
+
+
 @router.put("/{profile_id}/toggle-active", response_model=InfluencerProfileOut)
 async def admin_toggle_active(
     profile_id: str,
