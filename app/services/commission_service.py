@@ -9,6 +9,7 @@ class CommissionService:
         self.commissions = db["commissions"]
         self.profiles = db["influencer_profiles"]
         self.payouts = db["payouts"]
+        self.orders = db["orders"]
 
     # ── Commission Lifecycle ──────────────────────────────────────
 
@@ -44,6 +45,11 @@ class CommissionService:
         c = await self.commissions.find_one({"_id": ObjectId(commission_id)})
         if not c or c["status"] != "pending":
             return None
+
+        order = await self.orders.find_one({"_id": ObjectId(c["order_id"])})
+        if not order or order.get("status") != "delivered":
+            return None
+
         await self.commissions.update_one(
             {"_id": ObjectId(commission_id)},
             {"$set": {"status": "approved", "approved_at": datetime.utcnow()}},
@@ -146,19 +152,48 @@ class CommissionService:
         cursor = self.payouts.find({"influencer_id": influencer_id}).sort("created_at", -1)
         return await cursor.to_list(length=100)
 
+    async def _get_delivered_order_ids(self, order_ids: list[str]) -> set[str]:
+        """Return the subset of order_ids whose orders are delivered."""
+        oids = [ObjectId(oid) for oid in order_ids if ObjectId.is_valid(oid)]
+        if not oids:
+            return set()
+        cursor = self.orders.find(
+            {"_id": {"$in": oids}, "status": "delivered"},
+            {"_id": 1},
+        )
+        return {str(doc["_id"]) async for doc in cursor}
+
     async def bulk_approve_all_pending(self) -> int:
-        """Approve all pending commissions at once. Returns count approved."""
+        """Approve all pending commissions whose orders are delivered."""
+        pending = await self.commissions.find({"status": "pending"}).to_list(length=1000)
+        if not pending:
+            return 0
+        order_ids = [c["order_id"] for c in pending]
+        delivered = await self._get_delivered_order_ids(order_ids)
+        eligible = [c["_id"] for c in pending if c["order_id"] in delivered]
+        if not eligible:
+            return 0
         result = await self.commissions.update_many(
-            {"status": "pending"},
+            {"_id": {"$in": eligible}},
             {"$set": {"status": "approved", "approved_at": datetime.utcnow()}},
         )
         return result.modified_count
 
     async def bulk_approve_by_ids(self, commission_ids: list[str]) -> int:
-        """Approve specific commissions by ID. Returns count approved."""
+        """Approve specific commissions whose orders are delivered."""
         oids = [ObjectId(cid) for cid in commission_ids]
+        pending = await self.commissions.find(
+            {"_id": {"$in": oids}, "status": "pending"}
+        ).to_list(length=500)
+        if not pending:
+            return 0
+        order_ids = [c["order_id"] for c in pending]
+        delivered = await self._get_delivered_order_ids(order_ids)
+        eligible = [c["_id"] for c in pending if c["order_id"] in delivered]
+        if not eligible:
+            return 0
         result = await self.commissions.update_many(
-            {"_id": {"$in": oids}, "status": "pending"},
+            {"_id": {"$in": eligible}},
             {"$set": {"status": "approved", "approved_at": datetime.utcnow()}},
         )
         return result.modified_count

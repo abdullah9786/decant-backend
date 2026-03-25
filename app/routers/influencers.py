@@ -232,7 +232,7 @@ async def admin_approve_commission(
     csvc = CommissionService(db)
     c = await csvc.approve_commission(commission_id)
     if not c:
-        raise HTTPException(status_code=400, detail="Cannot approve this commission")
+        raise HTTPException(status_code=400, detail="Cannot approve — order must be delivered first")
     return c
 
 
