@@ -5,7 +5,16 @@ from app.schemas.user import UserOut
 class Token(BaseModel):
     access_token: str
     token_type: str
+    refresh_token: str
     user: UserOut
+
+
+class RefreshBody(BaseModel):
+    refresh_token: str
+
+
+class LogoutBody(BaseModel):
+    refresh_token: str
 
 class TokenData(BaseModel):
     email: Optional[str] = None

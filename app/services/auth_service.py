@@ -1,17 +1,68 @@
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.schemas.user import UserCreate
-from app.utils.security import get_password_hash, verify_password, create_access_token
+from app.utils.security import get_password_hash, verify_password
 from fastapi import HTTPException, status
 from bson import ObjectId
 from app.config.config import settings
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+import hashlib
 import secrets
 from app.services.mail_service import MailService
 
 class AuthService:
     def __init__(self, db: AsyncIOMotorDatabase):
         self.collection = db["users"]
+        self.refresh_sessions = db["refresh_sessions"]
         self.mail_service = MailService()
+
+    def _hash_refresh_token(self, plain: str) -> str:
+        return hashlib.sha256(plain.encode()).hexdigest()
+
+    async def issue_refresh_token(self, user_id: ObjectId) -> str:
+        plain = secrets.token_urlsafe(32)
+        token_hash = self._hash_refresh_token(plain)
+        expires = datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
+        await self.refresh_sessions.insert_one({
+            "user_id": user_id,
+            "token_hash": token_hash,
+            "expires_at": expires,
+            "created_at": datetime.now(timezone.utc),
+        })
+        return plain
+
+    async def rotate_refresh_token(self, plain_refresh: str) -> dict | None:
+        if not plain_refresh or not plain_refresh.strip():
+            return None
+        token_hash = self._hash_refresh_token(plain_refresh.strip())
+        sess = await self.refresh_sessions.find_one({"token_hash": token_hash})
+        if not sess:
+            return None
+        exp = sess["expires_at"]
+        if exp.tzinfo is None:
+            exp = exp.replace(tzinfo=timezone.utc)
+        if exp < datetime.now(timezone.utc):
+            await self.refresh_sessions.delete_one({"_id": sess["_id"]})
+            return None
+        user = await self.collection.find_one({"_id": sess["user_id"]})
+        if not user:
+            await self.refresh_sessions.delete_one({"_id": sess["_id"]})
+            return None
+        if not user.get("is_verified", False):
+            await self.refresh_sessions.delete_one({"_id": sess["_id"]})
+            return None
+        if not user.get("is_active", True):
+            await self.refresh_sessions.delete_one({"_id": sess["_id"]})
+            return None
+        await self.refresh_sessions.delete_one({"_id": sess["_id"]})
+        new_plain = await self.issue_refresh_token(user["_id"])
+        return {"user": user, "refresh_token": new_plain}
+
+    async def revoke_refresh_token(self, plain_refresh: str) -> bool:
+        if not plain_refresh or not plain_refresh.strip():
+            return False
+        token_hash = self._hash_refresh_token(plain_refresh.strip())
+        result = await self.refresh_sessions.delete_one({"token_hash": token_hash})
+        return result.deleted_count > 0
 
     async def attach_guest_orders(self, email: str, user_id: str, full_name: str = None) -> int:
         if not email:
