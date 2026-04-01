@@ -32,6 +32,14 @@ class OrderService:
             print(f"Razorpay Order Error: {str(e)}")
             raise ValueError(f"Could not create Razorpay order: {str(e)}")
 
+    async def ensure_stock_for_checkout(self, items: List[dict]) -> None:
+        """Raises ValueError with message if any line cannot be fulfilled."""
+        await self._ensure_stock(items)
+
+    def refund_payment_full(self, payment_id: str) -> None:
+        """Full refund for a captured payment. Raises on Razorpay API failure."""
+        self.client.payment.refund(payment_id)
+
     async def create(self, order_in: OrderCreate):
         order_dict = order_in.dict()
         order_dict["created_at"] = order_dict.get("created_at") or datetime.utcnow()

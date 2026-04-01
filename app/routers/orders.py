@@ -2,7 +2,13 @@ from fastapi import APIRouter, Depends, status, HTTPException
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
-from app.schemas.order import OrderCreate, OrderUpdate, OrderOut, OrderTrackOut
+from app.schemas.order import (
+    OrderCreate,
+    OrderUpdate,
+    OrderOut,
+    OrderTrackOut,
+    InitiatePaymentRequest,
+)
 from app.services.order_service import OrderService
 from app.db.mongodb import get_database
 from app.utils.deps import get_current_user, get_current_user_optional, require_admin
@@ -129,12 +135,16 @@ async def sync_guest_orders(db=Depends(get_database), current_user=Depends(get_c
     return {"synced": count}
 
 @router.post("/initiate-payment-only", response_model=RazorpayOrderResponse)
-async def initiate_payment_only(amount: float, db=Depends(get_database)):
+async def initiate_payment_only(body: InitiatePaymentRequest, db=Depends(get_database)):
     order_service = OrderService(db)
-    # Using a timestamped guest receipt since we don't have an order ID yet
+    items_dicts = [i.model_dump() for i in body.items]
+    try:
+        await order_service.ensure_stock_for_checkout(items_dicts)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     receipt = f"pre_{int(datetime.utcnow().timestamp())}"
     try:
-        return await order_service.create_razorpay_order(amount, receipt)
+        return await order_service.create_razorpay_order(body.amount, receipt)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -223,7 +233,24 @@ async def verify_and_create(
             
         return new_order
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        detail = str(e)
+        if "Insufficient stock" in detail:
+            try:
+                order_service.refund_payment_full(
+                    data.payment_details.razorpay_payment_id
+                )
+                detail = (
+                    "Some items are no longer in stock. Your payment has been refunded "
+                    "automatically. Please update your cart and try again."
+                )
+            except Exception as ref_err:
+                print(f"[RAZORPAY] Refund after stock failure failed: {ref_err}")
+                detail = (
+                    "Some items are no longer in stock and your order could not be placed. "
+                    "Your payment may still be captured — please contact support with your "
+                    f"payment id: {data.payment_details.razorpay_payment_id}"
+                )
+        raise HTTPException(status_code=400, detail=detail)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Order creation failed: {str(e)}")
 

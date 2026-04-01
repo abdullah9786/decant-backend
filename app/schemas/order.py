@@ -12,6 +12,19 @@ class OrderItem(BaseModel):
     quantity: int
     status: str = "pending"
 
+
+class InitiatePaymentItem(BaseModel):
+    """Minimal line item for stock validation before Razorpay checkout."""
+
+    product_id: str
+    size_ml: int
+    quantity: int
+
+
+class InitiatePaymentRequest(BaseModel):
+    amount: float
+    items: List[InitiatePaymentItem]
+
 class OrderBase(BaseModel):
     user_id: str
     customer_name: Optional[str] = None
