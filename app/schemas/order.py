@@ -4,6 +4,13 @@ from datetime import datetime
 from .user import PyObjectId
 from bson import ObjectId
 
+class GiftBoxSelectedProduct(BaseModel):
+    product_id: str
+    name: str = ""
+    size_ml: int = 0
+    price: float = 0
+
+
 class OrderItem(BaseModel):
     product_id: str
     name: str
@@ -12,6 +19,8 @@ class OrderItem(BaseModel):
     quantity: int
     status: str = "pending"
     is_pack: bool = False
+    gift_box_id: Optional[str] = None
+    selected_products: Optional[List[GiftBoxSelectedProduct]] = None
 
 
 class InitiatePaymentItem(BaseModel):
@@ -21,6 +30,8 @@ class InitiatePaymentItem(BaseModel):
     size_ml: int
     quantity: int
     is_pack: bool = False
+    gift_box_id: Optional[str] = None
+    selected_products: Optional[List[GiftBoxSelectedProduct]] = None
 
 
 class InitiatePaymentRequest(BaseModel):

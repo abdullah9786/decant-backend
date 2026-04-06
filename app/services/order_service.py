@@ -11,6 +11,7 @@ class OrderService:
     def __init__(self, db: AsyncIOMotorDatabase):
         self.collection = db["orders"]
         self.products = db["products"]
+        self.gift_boxes = db["gift_boxes"]
         self.client = razorpay.Client(auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET))
         self.mail_service = MailService()
 
@@ -103,59 +104,120 @@ class OrderService:
     async def restore_stock(self, items: List[dict]):
         """Reverse of _decrement_stock: add back stock for each line item."""
         for item in items:
-            product_id = item.get("product_id")
-            size_ml = item.get("size_ml")
             quantity = int(item.get("quantity", 0))
-            if not product_id or size_ml is None or quantity <= 0:
+            if quantity <= 0:
                 continue
-            try:
-                if item.get("is_pack"):
-                    await self.products.update_one(
-                        {"_id": ObjectId(product_id),
-                         "variants.size_ml": int(size_ml),
-                         "variants.is_pack": True},
-                        {"$inc": {"variants.$.stock": quantity}},
+
+            if item.get("gift_box_id"):
+                try:
+                    await self.gift_boxes.update_one(
+                        {"_id": ObjectId(item["gift_box_id"])},
+                        {"$inc": {"stock": quantity}},
                     )
-                else:
-                    total_ml = int(size_ml) * quantity
-                    await self.products.update_one(
-                        {"_id": ObjectId(product_id)},
-                        {"$inc": {"stock_ml": total_ml}},
-                    )
-            except Exception:
-                continue
+                    for sp in item.get("selected_products") or []:
+                        sp_ml = int(sp.get("size_ml", 0))
+                        if sp.get("product_id") and sp_ml > 0:
+                            await self.products.update_one(
+                                {"_id": ObjectId(sp["product_id"])},
+                                {"$inc": {"stock_ml": sp_ml * quantity}},
+                            )
+                except Exception:
+                    continue
+            else:
+                product_id = item.get("product_id")
+                size_ml = item.get("size_ml")
+                if not product_id or size_ml is None:
+                    continue
+                try:
+                    if item.get("is_pack"):
+                        await self.products.update_one(
+                            {"_id": ObjectId(product_id),
+                             "variants.size_ml": int(size_ml),
+                             "variants.is_pack": True},
+                            {"$inc": {"variants.$.stock": quantity}},
+                        )
+                    else:
+                        total_ml = int(size_ml) * quantity
+                        await self.products.update_one(
+                            {"_id": ObjectId(product_id)},
+                            {"$inc": {"stock_ml": total_ml}},
+                        )
+                except Exception:
+                    continue
 
     async def _decrement_stock(self, items: List[dict]):
         for item in items:
-            product_id = item.get("product_id")
-            size_ml = item.get("size_ml")
             quantity = int(item.get("quantity", 0))
-            if not product_id or size_ml is None or quantity <= 0:
+            if quantity <= 0:
                 continue
-            try:
-                if item.get("is_pack"):
-                    await self.products.update_one(
-                        {"_id": ObjectId(product_id),
-                         "variants.size_ml": int(size_ml),
-                         "variants.is_pack": True,
-                         "variants.stock": {"$gte": quantity}},
-                        {"$inc": {"variants.$.stock": -quantity}},
+
+            if item.get("gift_box_id"):
+                try:
+                    await self.gift_boxes.update_one(
+                        {"_id": ObjectId(item["gift_box_id"]), "stock": {"$gte": quantity}},
+                        {"$inc": {"stock": -quantity}},
                     )
-                else:
-                    total_ml = int(size_ml) * quantity
-                    await self.products.update_one(
-                        {"_id": ObjectId(product_id), "stock_ml": {"$gte": total_ml}},
-                        {"$inc": {"stock_ml": -total_ml}},
-                    )
-            except Exception:
-                continue
+                    for sp in item.get("selected_products") or []:
+                        sp_ml = int(sp.get("size_ml", 0))
+                        if sp.get("product_id") and sp_ml > 0:
+                            total_ml = sp_ml * quantity
+                            await self.products.update_one(
+                                {"_id": ObjectId(sp["product_id"]), "stock_ml": {"$gte": total_ml}},
+                                {"$inc": {"stock_ml": -total_ml}},
+                            )
+                except Exception:
+                    continue
+            else:
+                product_id = item.get("product_id")
+                size_ml = item.get("size_ml")
+                if not product_id or size_ml is None:
+                    continue
+                try:
+                    if item.get("is_pack"):
+                        await self.products.update_one(
+                            {"_id": ObjectId(product_id),
+                             "variants.size_ml": int(size_ml),
+                             "variants.is_pack": True,
+                             "variants.stock": {"$gte": quantity}},
+                            {"$inc": {"variants.$.stock": -quantity}},
+                        )
+                    else:
+                        total_ml = int(size_ml) * quantity
+                        await self.products.update_one(
+                            {"_id": ObjectId(product_id), "stock_ml": {"$gte": total_ml}},
+                            {"$inc": {"stock_ml": -total_ml}},
+                        )
+                except Exception:
+                    continue
 
     async def _ensure_stock(self, items: List[dict]):
         for item in items:
+            quantity = int(item.get("quantity", 0))
+            if quantity <= 0:
+                continue
+
+            if item.get("gift_box_id"):
+                box = await self.gift_boxes.find_one({"_id": ObjectId(item["gift_box_id"])})
+                if not box or int(box.get("stock", 0)) < quantity:
+                    raise ValueError("Gift box out of stock.")
+                box_ml = int(box.get("size_ml", 0))
+                for sp in item.get("selected_products") or []:
+                    sp_id = sp.get("product_id")
+                    if not sp_id:
+                        continue
+                    product = await self.products.find_one({"_id": ObjectId(sp_id)})
+                    if not product:
+                        raise ValueError("Insufficient stock for one or more items.")
+                    sp_ml = int(sp.get("size_ml", 0)) or box_ml
+                    total_ml = sp_ml * quantity
+                    available = int(product.get("stock_ml", 0))
+                    if available < total_ml:
+                        raise ValueError("Insufficient stock for one or more items.")
+                continue
+
             product_id = item.get("product_id")
             size_ml = item.get("size_ml")
-            quantity = int(item.get("quantity", 0))
-            if not product_id or size_ml is None or quantity <= 0:
+            if not product_id or size_ml is None:
                 continue
             product = await self.products.find_one({"_id": ObjectId(product_id)})
             if not product:
