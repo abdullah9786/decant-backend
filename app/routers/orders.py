@@ -41,6 +41,9 @@ class VerifyAndCreateRequest(BaseModel):
     payment_details: PaymentVerifyRequest
     order_data: OrderCreate
 
+class CustomerCancelRequest(BaseModel):
+    customer_email: Optional[str] = None
+
 @router.post("/", response_model=OrderOut, status_code=status.HTTP_201_CREATED)
 async def create_order(order_in: OrderCreate, db=Depends(get_database), current_user=Depends(get_current_user_optional)):
     order_service = OrderService(db)
@@ -67,6 +70,125 @@ async def track_order(id: str, db=Depends(get_database)):
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     return order
+
+@router.post("/{order_id}/customer-cancel")
+async def customer_cancel_order(
+    order_id: str,
+    body: CustomerCancelRequest,
+    db=Depends(get_database),
+    current_user=Depends(get_current_user_optional),
+):
+    order_service = OrderService(db)
+    order = await order_service.get_by_id(order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    if order.get("status") in ("cancelled", "refunded"):
+        return {"ok": True, "message": "Order is already cancelled."}
+
+    created_at = order.get("created_at")
+    if not created_at or (datetime.utcnow() - created_at) > timedelta(hours=24):
+        raise HTTPException(status_code=400, detail="Cancellation window (24 hours) has expired.")
+
+    if order.get("status") not in ("pending", "processing"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Order cannot be cancelled in '{order.get('status')}' state.",
+        )
+
+    if current_user and str(order.get("user_id")) != "guest":
+        if str(order.get("user_id")) != str(current_user["_id"]):
+            raise HTTPException(status_code=403, detail="You are not authorized to cancel this order.")
+    else:
+        if not body.customer_email:
+            raise HTTPException(status_code=400, detail="Email is required to cancel a guest order.")
+        if (body.customer_email.strip().lower() != (order.get("customer_email") or "").strip().lower()):
+            raise HTTPException(status_code=403, detail="Email does not match the order.")
+
+    # Block cancel if commission already paid out
+    comm = await db["commissions"].find_one({
+        "order_id": str(order["_id"]),
+        "status": "paid",
+    })
+    if comm:
+        raise HTTPException(
+            status_code=400,
+            detail="Commission for this order has already been paid out. Please contact support to cancel.",
+        )
+
+    # Refund via Razorpay if payment was captured
+    refunded = False
+    if (
+        order.get("payment_status") == "paid"
+        and order.get("payment_details", {}).get("razorpay_payment_id")
+    ):
+        try:
+            order_service.refund_payment_full(
+                order["payment_details"]["razorpay_payment_id"],
+                order["total_amount"],
+            )
+            refunded = True
+        except Exception as e:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Refund failed — please contact support. ({e})",
+            )
+
+    # Restore stock
+    await order_service.restore_stock(order.get("items", []))
+
+    # Update order document
+    update_fields: dict = {
+        "status": "cancelled",
+        "cancelled_at": datetime.utcnow(),
+        "cancelled_by": "customer",
+        "cancellation_reason": "Customer cancel (24h window)",
+    }
+    if refunded:
+        update_fields["payment_status"] = "refunded"
+    await db["orders"].update_one({"_id": order["_id"]}, {"$set": update_fields})
+
+    # Cancel commission
+    if order.get("influencer_id"):
+        try:
+            csvc = CommissionService(db)
+            pending_comm = await db["commissions"].find_one({
+                "order_id": str(order["_id"]),
+                "status": {"$in": ["pending", "approved"]},
+            })
+            if pending_comm:
+                await csvc.cancel_commission(
+                    str(pending_comm["_id"]),
+                    reason="Order cancelled by customer",
+                )
+        except Exception as e:
+            print(f"[CANCEL] Commission cancel error (non-blocking): {e}")
+
+    # Release coupon usage
+    if order.get("coupon_code"):
+        try:
+            coupon_svc = CouponService(db)
+            await coupon_svc.release_coupon(order["coupon_code"])
+        except Exception as e:
+            print(f"[CANCEL] Coupon release error (non-blocking): {e}")
+
+    # Send cancellation email
+    try:
+        mail_service = MailService()
+        await mail_service.send_order_cancellation(
+            order.get("customer_email"),
+            order.get("customer_name"),
+            order,
+        )
+    except Exception as e:
+        print(f"[CANCEL] Email error (non-blocking): {e}")
+
+    return {
+        "ok": True,
+        "message": "Order cancelled successfully."
+            + (" A refund has been initiated." if refunded else ""),
+    }
+
 
 @router.get("/abandoned-checkouts")
 async def get_abandoned_checkouts(db=Depends(get_database), _admin=Depends(require_admin)):
@@ -284,7 +406,8 @@ async def verify_and_create(
         if "Insufficient stock" in detail:
             try:
                 order_service.refund_payment_full(
-                    data.payment_details.razorpay_payment_id
+                    data.payment_details.razorpay_payment_id,
+                    data.order_data.total_amount,
                 )
                 detail = (
                     "Some items are no longer in stock. Your payment has been refunded "

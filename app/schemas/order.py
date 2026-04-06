@@ -63,11 +63,17 @@ class OrderOut(OrderBase):
 class OrderTrackOut(BaseModel):
     id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
     customer_name: Optional[str] = None
+    customer_email: Optional[str] = None
     customer_phone: Optional[str] = None
+    user_id: Optional[str] = None
     status: str = "pending"
+    payment_status: Optional[str] = None
     items: List[OrderItem]
     total_amount: float
     created_at: datetime = Field(default_factory=datetime.utcnow)
+    cancelled_at: Optional[datetime] = None
+    cancelled_by: Optional[str] = None
+    cancellation_reason: Optional[str] = None
 
     class Config:
         populate_by_name = True

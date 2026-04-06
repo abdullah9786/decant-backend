@@ -36,9 +36,30 @@ class OrderService:
         """Raises ValueError with message if any line cannot be fulfilled."""
         await self._ensure_stock(items)
 
-    def refund_payment_full(self, payment_id: str) -> None:
-        """Full refund for a captured payment. Raises on Razorpay API failure."""
-        self.client.payment.refund(payment_id)
+    def refund_payment_full(self, payment_id: str, amount_inr: float) -> None:
+        """Full refund for a captured payment. amount_inr is in INR (converted to paise)."""
+        amount_paise = int(round(amount_inr * 100))
+        print(f"[RAZORPAY-REFUND] Attempting refund: payment_id={payment_id}, amount_inr={amount_inr}, amount_paise={amount_paise}")
+        try:
+            payment = self.client.payment.fetch(payment_id)
+            print(f"[RAZORPAY-REFUND] Fetched payment: status={payment.get('status')}, "
+                  f"amount={payment.get('amount')}, currency={payment.get('currency')}")
+        except Exception as fetch_err:
+            print(f"[RAZORPAY-REFUND] payment.fetch() failed: {fetch_err}")
+            raise
+        if payment.get("status") != "captured":
+            raise ValueError(
+                f"Payment not in captured state (current: {payment.get('status')})."
+            )
+        try:
+            result = self.client.refund.create({
+                "payment_id": payment_id,
+                "amount": amount_paise,
+            })
+            print(f"[RAZORPAY-REFUND] Refund success: {result}")
+        except Exception as refund_err:
+            print(f"[RAZORPAY-REFUND] refund.create() failed: {refund_err}")
+            raise
 
     async def create(self, order_in: OrderCreate):
         order_dict = order_in.dict()
@@ -78,6 +99,23 @@ class OrderService:
             )
             
         return updated_order
+
+    async def restore_stock(self, items: List[dict]):
+        """Reverse of _decrement_stock: add back stock_ml for each line item."""
+        for item in items:
+            product_id = item.get("product_id")
+            size_ml = item.get("size_ml")
+            quantity = int(item.get("quantity", 0))
+            if not product_id or size_ml is None or quantity <= 0:
+                continue
+            total_ml = int(size_ml) * quantity
+            try:
+                await self.products.update_one(
+                    {"_id": ObjectId(product_id)},
+                    {"$inc": {"stock_ml": total_ml}},
+                )
+            except Exception:
+                continue
 
     async def _decrement_stock(self, items: List[dict]):
         for item in items:

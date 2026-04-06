@@ -18,8 +18,8 @@ async def get_stats(db: AsyncIOMotorDatabase = Depends(get_database), _admin=Dep
     revenue_result = await revenue_cursor.to_list(length=1)
     revenue = revenue_result[0]["total"] if revenue_result else 0
     
-    # Counts
-    orders_count = await db["orders"].count_documents({})
+    # Counts (exclude cancelled / refunded)
+    orders_count = await db["orders"].count_documents({"status": {"$nin": ["cancelled", "refunded"]}})
     users_count = await db["users"].count_documents({})
     
     # Low stock
@@ -30,7 +30,7 @@ async def get_stats(db: AsyncIOMotorDatabase = Depends(get_database), _admin=Dep
     # 2. Daily Sales & Orders (Last 7 days)
     seven_days_ago = datetime.utcnow() - timedelta(days=7)
     daily_cursor = db["orders"].aggregate([
-        {"$match": {"created_at": {"$gte": seven_days_ago}}},
+        {"$match": {"created_at": {"$gte": seven_days_ago}, "status": {"$nin": ["cancelled", "refunded"]}}},
         {
             "$group": {
                 "_id": {"$dateToString": {"format": "%Y-%m-%d", "date": "$created_at"}},

@@ -61,6 +61,13 @@ class CouponService:
             {"$inc": {"times_used": 1}},
         )
 
+    async def release_coupon(self, code: str) -> None:
+        """Decrement usage counter when an order using this coupon is cancelled."""
+        await self.coupons.update_one(
+            {"code": code.upper().strip(), "times_used": {"$gte": 1}},
+            {"$inc": {"times_used": -1}},
+        )
+
     async def get_all_coupons(self) -> list:
         cursor = self.coupons.find({}).sort("created_at", -1)
         return await cursor.to_list(length=200)

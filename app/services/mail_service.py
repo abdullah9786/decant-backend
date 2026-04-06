@@ -76,7 +76,9 @@ class MailService:
         return await self._send_email(email, full_name, subject, html_body)
 
     async def send_order_confirmation(self, email: str, customer_name: str, order: Dict[str, Any]):
-        subject = f"Order Confirmed: #{str(order.get('_id', ''))[:8].upper()}"
+        full_id = str(order.get('_id', ''))
+        subject = f"Order Confirmed — DECUME"
+        track_url = f"{settings.APP_BASE_URL}/track-order?orderId={full_id}"
         items_html = ""
         for item in order.get('items', []):
             items_html += f"<tr><td>{item['name']} ({item['size_ml']}ml)</td><td style='text-align: right;'>x{item['quantity']}</td><td style='text-align: right;'>₹{item['price'] * item['quantity']}</td></tr>"
@@ -86,6 +88,11 @@ class MailService:
             <h2 style="text-transform: uppercase; letter-spacing: 0.2em; border-bottom: 2px solid #059669; padding-bottom: 10px;">Order Confirmed</h2>
             <p>Hi {customer_name},</p>
             <p>Thank you for your order. We've received your payment and are preparing your decants.</p>
+
+            <div style="margin: 20px 0; padding: 15px; background: #f9fafb; border-radius: 5px;">
+                <p style="margin: 0; font-size: 11px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.1em; color: #6b7280;">Order ID</p>
+                <p style="margin: 4px 0 0; font-size: 14px; font-weight: bold; color: #022c22; word-break: break-all;">{full_id}</p>
+            </div>
             
             <table style="width: 100%; margin-top: 20px; border-collapse: collapse;">
                 <thead style="background-color: #f9fafb; font-size: 12px; text-transform: uppercase; letter-spacing: 0.1em;">
@@ -99,36 +106,63 @@ class MailService:
                 </tfoot>
             </table>
 
-            <div style="margin: 30px 0; padding: 20px; background: #f9fafb; border-radius: 5px;">
-                <p style="margin: 0; font-size: 12px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.1em;">Shipping To:</p>
-                <p style="margin: 5px 0 0; font-size: 14px; color: #374151;">{order['shipping_address']}</p>
+            <div style="margin: 20px 0; padding: 15px; background: #f9fafb; border-radius: 5px;">
+                <p style="margin: 0; font-size: 11px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.1em; color: #6b7280;">Shipping To</p>
+                <p style="margin: 4px 0 0; font-size: 14px; color: #374151;">{order['shipping_address']}</p>
             </div>
 
-            <p style="font-size: 12px; color: #6b7280;">You can track your order status on our website at any time.</p>
+            <div style="margin: 30px 0;">
+                <a href="{track_url}" style="background-color: #022c22; color: white; padding: 12px 25px; text-decoration: none; font-weight: bold; text-transform: uppercase; letter-spacing: 0.1em; border-radius: 5px;">Track Order</a>
+            </div>
         </div>
         """
         return await self._send_email(email, customer_name, subject, html_body)
 
     async def send_delivery_notification(self, email: str, customer_name: str, order_id: str):
         subject = "Fragrance Delivered: Enjoy your Scent Ritual"
+        full_id = str(order_id)
+        track_url = f"{settings.APP_BASE_URL}/track-order?orderId={full_id}"
         html_body = f"""
         <div style="font-family: serif; color: #022c22; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #f0fdf4;">
             <h2 style="text-transform: uppercase; letter-spacing: 0.2em; border-bottom: 2px solid #059669; padding-bottom: 10px;">Delivered</h2>
             <p>Hi {customer_name},</p>
-            <p>Your order #{str(order_id)[:8].upper()} has been successfully delivered. We hope these fragrances bring a touch of luxury to your day.</p>
+            <p>Your order has been successfully delivered. We hope these fragrances bring a touch of luxury to your day.</p>
+            <div style="margin: 15px 0; padding: 15px; background: #f9fafb; border-radius: 5px;">
+                <p style="margin: 0; font-size: 11px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.1em; color: #6b7280;">Order ID</p>
+                <p style="margin: 4px 0 0; font-size: 14px; font-weight: bold; color: #022c22; word-break: break-all;">{full_id}</p>
+            </div>
             <p>If you have any issues with your delivery, please contact our support team immediately.</p>
             <div style="margin: 30px 0;">
-                <a href="{settings.APP_BASE_URL}/profile" style="background-color: #022c22; color: white; padding: 12px 25px; text-decoration: none; font-weight: bold; text-transform: uppercase; letter-spacing: 0.1em; border-radius: 5px;">View My Orders</a>
+                <a href="{track_url}" style="background-color: #022c22; color: white; padding: 12px 25px; text-decoration: none; font-weight: bold; text-transform: uppercase; letter-spacing: 0.1em; border-radius: 5px;">Track Order</a>
             </div>
         </div>
         """
         return await self._send_email(email, customer_name, subject, html_body)
 
+    async def send_order_cancellation(self, email: str, customer_name: str, order: Dict[str, Any]):
+        full_id = str(order.get("_id", ""))
+        subject = f"Order Cancelled — DECUME"
+        name = customer_name or "there"
+        html_body = f"""
+        <div style="font-family: serif; color: #022c22; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #f0fdf4;">
+            <h2 style="text-transform: uppercase; letter-spacing: 0.2em; border-bottom: 2px solid #dc2626; padding-bottom: 10px;">Order Cancelled</h2>
+            <p>Hi {name},</p>
+            <div style="margin: 15px 0; padding: 15px; background: #fef2f2; border-radius: 5px;">
+                <p style="margin: 0; font-size: 11px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.1em; color: #6b7280;">Order ID</p>
+                <p style="margin: 4px 0 0; font-size: 14px; font-weight: bold; color: #022c22; word-break: break-all;">{full_id}</p>
+            </div>
+            <p>Your order for <strong>₹{order.get('total_amount', 0)}</strong> has been cancelled as requested.</p>
+            <p>If your payment was already captured, a full refund has been initiated and should reflect in your account within 5–7 business days.</p>
+            <p style="font-size: 12px; color: #6b7280; margin-top: 30px;">If you did not request this cancellation, please contact our support team immediately.</p>
+        </div>
+        """
+        return await self._send_email(email, name, subject, html_body)
+
     async def send_admin_new_order_alert(self, order: Dict[str, Any]):
         # This one is for the admin email
         admin_email = os.getenv("ADMIN_EMAIL", "abdullahansari9768@gmail.com")
         print("admin_email", admin_email, self.from_email)
-        subject = f"NEW ORDER ALERT: ₹{order['total_amount']} (Order #{str(order.get('_id', ''))[:8].upper()})"
+        subject = f"NEW ORDER ALERT: ₹{order['total_amount']}"
         html_body = f"""
         <div style="font-family: sans-serif; color: #1e293b; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0;">
             <h2 style="color: #020617;">New Order Received</h2>
