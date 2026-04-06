@@ -29,6 +29,7 @@ class OrderBase(BaseModel):
     user_id: str
     customer_name: Optional[str] = None
     customer_email: Optional[str] = None
+    customer_phone: Optional[str] = None
     items: List[OrderItem]
     total_amount: float
     status: str = "pending"
@@ -48,6 +49,7 @@ class OrderUpdate(BaseModel):
     payment_status: Optional[str] = None
     items: Optional[List[OrderItem]] = None
     payment_details: Optional[Dict[str, Any]] = None
+    customer_phone: Optional[str] = None
 
 class OrderOut(OrderBase):
     id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
@@ -60,6 +62,7 @@ class OrderOut(OrderBase):
 class OrderTrackOut(BaseModel):
     id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
     customer_name: Optional[str] = None
+    customer_phone: Optional[str] = None
     status: str = "pending"
     items: List[OrderItem]
     total_amount: float
