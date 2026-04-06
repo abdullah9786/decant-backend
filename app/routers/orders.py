@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Depends, Request, status, HTTPException
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 import hashlib
 import hmac
 import json
+from bson import ObjectId
 from pydantic import BaseModel
 from app.schemas.order import (
     OrderCreate,
@@ -66,6 +67,45 @@ async def track_order(id: str, db=Depends(get_database)):
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     return order
+
+@router.get("/abandoned-checkouts")
+async def get_abandoned_checkouts(db=Depends(get_database), _admin=Depends(require_admin)):
+    cutoff = datetime.utcnow() - timedelta(minutes=30)
+    cursor = db["pending_checkouts"].find({
+        "status": "pending",
+        "created_at": {"$lt": cutoff},
+    }).sort("created_at", -1)
+    docs = await cursor.to_list(length=500)
+    results = []
+    for doc in docs:
+        od = doc.get("order_data") or {}
+        results.append({
+            "id": str(doc["_id"]),
+            "razorpay_order_id": doc.get("razorpay_order_id"),
+            "customer_name": od.get("customer_name"),
+            "customer_email": od.get("customer_email"),
+            "customer_phone": od.get("customer_phone"),
+            "items": od.get("items", []),
+            "total_amount": od.get("total_amount", 0),
+            "shipping_address": od.get("shipping_address"),
+            "coupon_code": od.get("coupon_code"),
+            "influencer_id": od.get("influencer_id"),
+            "created_at": doc.get("created_at", "").isoformat() if doc.get("created_at") else None,
+        })
+    return results
+
+
+@router.delete("/abandoned-checkouts/{checkout_id}")
+async def delete_abandoned_checkout(
+    checkout_id: str,
+    db=Depends(get_database),
+    _admin=Depends(require_admin),
+):
+    result = await db["pending_checkouts"].delete_one({"_id": ObjectId(checkout_id)})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Checkout not found")
+    return {"ok": True}
+
 
 @router.get("/{id}", response_model=OrderOut)
 async def get_order(id: str, db=Depends(get_database), current_user=Depends(get_current_user)):
@@ -158,7 +198,10 @@ async def initiate_payment_only(body: InitiatePaymentRequest, db=Depends(get_dat
             {"$set": {
                 "razorpay_order_id": rzp_order["id"],
                 "order_data": body.order_data,
+                "status": "pending",
                 "created_at": datetime.utcnow(),
+                "converted_at": None,
+                "order_id": None,
             }},
             upsert=True,
         )
@@ -226,10 +269,14 @@ async def verify_and_create(
         # 4. Side-effects (commission, coupon, email)
         await _post_order_side_effects(new_order, db)
 
-        # Clean up the pending checkout record
-        await db["pending_checkouts"].delete_one({
-            "razorpay_order_id": data.payment_details.razorpay_order_id,
-        })
+        await db["pending_checkouts"].update_one(
+            {"razorpay_order_id": data.payment_details.razorpay_order_id},
+            {"$set": {
+                "status": "converted",
+                "converted_at": datetime.utcnow(),
+                "order_id": str(new_order["_id"]),
+            }},
+        )
 
         return new_order
     except ValueError as e:
@@ -360,7 +407,14 @@ async def razorpay_webhook(request: Request, db=Depends(get_database)):
 
     await _post_order_side_effects(new_order, db)
 
-    await db["pending_checkouts"].delete_one({"razorpay_order_id": rzp_order_id})
+    await db["pending_checkouts"].update_one(
+        {"razorpay_order_id": rzp_order_id},
+        {"$set": {
+            "status": "converted",
+            "converted_at": datetime.utcnow(),
+            "order_id": str(new_order["_id"]),
+        }},
+    )
 
     print(f"[WEBHOOK] Order {new_order['_id']} created for rzp order {rzp_order_id}")
     return {"ok": True, "order_id": str(new_order["_id"])}
