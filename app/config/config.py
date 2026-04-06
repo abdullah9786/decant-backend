@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     # Razorpay Payment Gateway
     RAZORPAY_KEY_ID: str = os.getenv("RAZORPAY_KEY_ID", "")
     RAZORPAY_KEY_SECRET: str = os.getenv("RAZORPAY_KEY_SECRET", "")
+    RAZORPAY_WEBHOOK_SECRET: str = os.getenv("RAZORPAY_WEBHOOK_SECRET", "")
 
     # Admin Notifications
     ADMIN_EMAIL: str = os.getenv("ADMIN_EMAIL", "")

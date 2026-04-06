@@ -24,6 +24,7 @@ class InitiatePaymentItem(BaseModel):
 class InitiatePaymentRequest(BaseModel):
     amount: float
     items: List[InitiatePaymentItem]
+    order_data: Optional[Dict[str, Any]] = None
 
 class OrderBase(BaseModel):
     user_id: str

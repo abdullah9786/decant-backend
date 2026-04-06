@@ -12,6 +12,8 @@ async def connect_to_mongo():
     db.client = AsyncIOMotorClient(settings.MONGODB_URL)
     db.db = db.client[settings.DATABASE_NAME]
     await db.db["refresh_sessions"].create_index("token_hash", unique=True)
+    await db.db["pending_checkouts"].create_index("razorpay_order_id", unique=True)
+    await db.db["pending_checkouts"].create_index("created_at", expireAfterSeconds=86400)
     print(f"\n\033[92m[SUCCESS]\033[0m Database connected: {settings.DATABASE_NAME}")
     logging.info(f"Connected to MongoDB: {settings.DATABASE_NAME}")
 

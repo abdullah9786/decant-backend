@@ -1,6 +1,9 @@
-from fastapi import APIRouter, Depends, status, HTTPException
+from fastapi import APIRouter, Depends, Request, status, HTTPException
 from datetime import datetime
 from typing import List, Optional, Dict, Any
+import hashlib
+import hmac
+import json
 from pydantic import BaseModel
 from app.schemas.order import (
     OrderCreate,
@@ -16,6 +19,7 @@ from app.services.auth_service import AuthService
 from app.services.mail_service import MailService
 from app.services.commission_service import CommissionService
 from app.services.coupon_service import CouponService
+from app.config.config import settings
 
 router = APIRouter(prefix="/orders", tags=["orders"])
 
@@ -144,9 +148,22 @@ async def initiate_payment_only(body: InitiatePaymentRequest, db=Depends(get_dat
         raise HTTPException(status_code=400, detail=str(e))
     receipt = f"pre_{int(datetime.utcnow().timestamp())}"
     try:
-        return await order_service.create_razorpay_order(body.amount, receipt)
+        rzp_order = await order_service.create_razorpay_order(body.amount, receipt)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+    if body.order_data:
+        await db["pending_checkouts"].update_one(
+            {"razorpay_order_id": rzp_order["id"]},
+            {"$set": {
+                "razorpay_order_id": rzp_order["id"],
+                "order_data": body.order_data,
+                "created_at": datetime.utcnow(),
+            }},
+            upsert=True,
+        )
+
+    return rzp_order
 
 @router.post("/verify-and-create", response_model=OrderOut)
 async def verify_and_create(
@@ -167,6 +184,13 @@ async def verify_and_create(
         order_service.client.utility.verify_payment_signature(params_dict)
     except Exception as e:
         raise HTTPException(status_code=400, detail="Signature verification failed")
+
+    # Idempotency: if an order already exists for this razorpay_order_id (e.g. webhook arrived first), return it
+    existing = await db["orders"].find_one({
+        "payment_details.razorpay_order_id": data.payment_details.razorpay_order_id
+    })
+    if existing:
+        return existing
 
     # 2. Prepare Order Data
     order_in = data.order_data
@@ -198,39 +222,15 @@ async def verify_and_create(
     # 3. Create Order (Stock will be checked and decremented here)
     try:
         new_order = await order_service.create(order_in)
-        
-        # 4. Create commission if order was referred by an influencer
-        if new_order.get("influencer_id"):
-            try:
-                csvc = CommissionService(db)
-                await csvc.create_commission(
-                    influencer_id=new_order["influencer_id"],
-                    order_id=str(new_order["_id"]),
-                    order_total=new_order.get("total_amount", 0),
-                    buyer_user_id=new_order.get("user_id"),
-                )
-            except Exception as comm_err:
-                print(f"[COMMISSION] Creation error (non-blocking): {comm_err}")
 
-        if new_order.get("coupon_code"):
-            try:
-                coupon_svc = CouponService(db)
-                await coupon_svc.use_coupon(new_order["coupon_code"])
-            except Exception:
-                pass
+        # 4. Side-effects (commission, coupon, email)
+        await _post_order_side_effects(new_order, db)
 
-        # 5. Trigger Notifications
-        mail_service = MailService()
-        try:
-            await mail_service.send_order_confirmation(
-                new_order.get("customer_email"),
-                new_order.get("customer_name"),
-                new_order
-            )
-            await mail_service.send_admin_new_order_alert(new_order)
-        except Exception as mail_err:
-            print(f"[MAIL] Async notification error (non-blocking): {mail_err}")
-            
+        # Clean up the pending checkout record
+        await db["pending_checkouts"].delete_one({
+            "razorpay_order_id": data.payment_details.razorpay_order_id,
+        })
+
         return new_order
     except ValueError as e:
         detail = str(e)
@@ -254,8 +254,119 @@ async def verify_and_create(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Order creation failed: {str(e)}")
 
+async def _post_order_side_effects(new_order: dict, db) -> None:
+    """Commission, coupon usage, emails — shared by verify-and-create + webhook."""
+    if new_order.get("influencer_id"):
+        try:
+            csvc = CommissionService(db)
+            await csvc.create_commission(
+                influencer_id=new_order["influencer_id"],
+                order_id=str(new_order["_id"]),
+                order_total=new_order.get("total_amount", 0),
+                buyer_user_id=new_order.get("user_id"),
+            )
+        except Exception as comm_err:
+            print(f"[COMMISSION] Creation error (non-blocking): {comm_err}")
+
+    if new_order.get("coupon_code"):
+        try:
+            coupon_svc = CouponService(db)
+            await coupon_svc.use_coupon(new_order["coupon_code"])
+        except Exception:
+            pass
+
+    mail_service = MailService()
+    try:
+        await mail_service.send_order_confirmation(
+            new_order.get("customer_email"),
+            new_order.get("customer_name"),
+            new_order,
+        )
+        await mail_service.send_admin_new_order_alert(new_order)
+    except Exception as mail_err:
+        print(f"[MAIL] Async notification error (non-blocking): {mail_err}")
+
+
+@router.post("/webhook/razorpay")
+async def razorpay_webhook(request: Request, db=Depends(get_database)):
+    body = await request.body()
+    signature = request.headers.get("X-Razorpay-Signature", "")
+
+    if settings.RAZORPAY_WEBHOOK_SECRET:
+        expected = hmac.new(
+            settings.RAZORPAY_WEBHOOK_SECRET.encode(),
+            body,
+            hashlib.sha256,
+        ).hexdigest()
+        if not hmac.compare_digest(expected, signature):
+            raise HTTPException(status_code=400, detail="Invalid webhook signature")
+
+    try:
+        payload = json.loads(body)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+
+    event = payload.get("event")
+    if event not in ("payment.captured", "order.paid"):
+        return {"ok": True, "skipped": event}
+
+    payment_entity = (
+        payload.get("payload", {}).get("payment", {}).get("entity", {})
+    )
+    rzp_order_id = payment_entity.get("order_id")
+    rzp_payment_id = payment_entity.get("id")
+
+    if not rzp_order_id or not rzp_payment_id:
+        return {"ok": True, "skipped": "missing ids"}
+
+    existing = await db["orders"].find_one({
+        "payment_details.razorpay_order_id": rzp_order_id,
+    })
+    if existing:
+        return {"ok": True, "already_created": str(existing["_id"])}
+
+    pending = await db["pending_checkouts"].find_one({"razorpay_order_id": rzp_order_id})
+    if not pending or not pending.get("order_data"):
+        print(f"[WEBHOOK] No pending checkout for rzp order {rzp_order_id}")
+        return {"ok": True, "skipped": "no_pending_checkout"}
+
+    od = pending["order_data"]
+
+    if od.get("coupon_code") and not od.get("influencer_id"):
+        try:
+            coupon_svc = CouponService(db)
+            result = await coupon_svc.validate_coupon(od["coupon_code"])
+            if result["valid"] and result["influencer_id"]:
+                od["influencer_id"] = result["influencer_id"]
+        except Exception:
+            pass
+
+    od["payment_status"] = "paid"
+    od["status"] = "processing"
+    od["payment_details"] = {
+        "razorpay_order_id": rzp_order_id,
+        "razorpay_payment_id": rzp_payment_id,
+        "paid_at": datetime.utcnow().isoformat(),
+        "source": "webhook",
+    }
+
+    order_service = OrderService(db)
+    try:
+        order_in = OrderCreate(**od)
+        new_order = await order_service.create(order_in)
+    except Exception as e:
+        print(f"[WEBHOOK] Order creation failed for rzp order {rzp_order_id}: {e}")
+        return {"ok": False, "error": str(e)}
+
+    await _post_order_side_effects(new_order, db)
+
+    await db["pending_checkouts"].delete_one({"razorpay_order_id": rzp_order_id})
+
+    print(f"[WEBHOOK] Order {new_order['_id']} created for rzp order {rzp_order_id}")
+    return {"ok": True, "order_id": str(new_order["_id"])}
+
+
 @router.post("/verify-payment")
 async def verify_payment(data: PaymentVerifyRequest, db=Depends(get_database)):
-    # Keep legacy verify_payment for existing orders if any
     order_service = OrderService(db)
-    # ... rest of legacy logic if needed, but we'll focus on the new one
+    # Legacy endpoint — kept for backward compat
