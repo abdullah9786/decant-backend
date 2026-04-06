@@ -7,6 +7,8 @@ from bson import ObjectId
 class DecantVariant(BaseModel):
     size_ml: int
     price: float
+    is_pack: bool = False
+    stock: int = 0
 
 class ProductBase(BaseModel):
     name: str

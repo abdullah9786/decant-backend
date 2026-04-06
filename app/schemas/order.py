@@ -11,6 +11,7 @@ class OrderItem(BaseModel):
     price: float
     quantity: int
     status: str = "pending"
+    is_pack: bool = False
 
 
 class InitiatePaymentItem(BaseModel):
@@ -19,6 +20,7 @@ class InitiatePaymentItem(BaseModel):
     product_id: str
     size_ml: int
     quantity: int
+    is_pack: bool = False
 
 
 class InitiatePaymentRequest(BaseModel):

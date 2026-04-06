@@ -101,19 +101,27 @@ class OrderService:
         return updated_order
 
     async def restore_stock(self, items: List[dict]):
-        """Reverse of _decrement_stock: add back stock_ml for each line item."""
+        """Reverse of _decrement_stock: add back stock for each line item."""
         for item in items:
             product_id = item.get("product_id")
             size_ml = item.get("size_ml")
             quantity = int(item.get("quantity", 0))
             if not product_id or size_ml is None or quantity <= 0:
                 continue
-            total_ml = int(size_ml) * quantity
             try:
-                await self.products.update_one(
-                    {"_id": ObjectId(product_id)},
-                    {"$inc": {"stock_ml": total_ml}},
-                )
+                if item.get("is_pack"):
+                    await self.products.update_one(
+                        {"_id": ObjectId(product_id),
+                         "variants.size_ml": int(size_ml),
+                         "variants.is_pack": True},
+                        {"$inc": {"variants.$.stock": quantity}},
+                    )
+                else:
+                    total_ml = int(size_ml) * quantity
+                    await self.products.update_one(
+                        {"_id": ObjectId(product_id)},
+                        {"$inc": {"stock_ml": total_ml}},
+                    )
             except Exception:
                 continue
 
@@ -124,12 +132,21 @@ class OrderService:
             quantity = int(item.get("quantity", 0))
             if not product_id or size_ml is None or quantity <= 0:
                 continue
-            total_ml = int(size_ml) * quantity
             try:
-                await self.products.update_one(
-                    {"_id": ObjectId(product_id), "stock_ml": {"$gte": total_ml}},
-                    {"$inc": {"stock_ml": -total_ml}},
-                )
+                if item.get("is_pack"):
+                    await self.products.update_one(
+                        {"_id": ObjectId(product_id),
+                         "variants.size_ml": int(size_ml),
+                         "variants.is_pack": True,
+                         "variants.stock": {"$gte": quantity}},
+                        {"$inc": {"variants.$.stock": -quantity}},
+                    )
+                else:
+                    total_ml = int(size_ml) * quantity
+                    await self.products.update_one(
+                        {"_id": ObjectId(product_id), "stock_ml": {"$gte": total_ml}},
+                        {"$inc": {"stock_ml": -total_ml}},
+                    )
             except Exception:
                 continue
 
@@ -140,20 +157,33 @@ class OrderService:
             quantity = int(item.get("quantity", 0))
             if not product_id or size_ml is None or quantity <= 0:
                 continue
-            total_ml = int(size_ml) * quantity
             product = await self.products.find_one({"_id": ObjectId(product_id)})
-            if product and product.get("stock_ml") is None:
-                computed = 0
-                for v in product.get("variants", []):
-                    try:
-                        computed += int(v.get("size_ml", 0)) * int(v.get("stock", 0))
-                    except Exception:
-                        continue
-                await self.products.update_one(
-                    {"_id": ObjectId(product_id)},
-                    {"$set": {"stock_ml": computed}},
-                )
-                product["stock_ml"] = computed
-            available = int(product.get("stock_ml", 0)) if product else 0
-            if available < total_ml:
+            if not product:
                 raise ValueError("Insufficient stock for one or more items.")
+
+            if item.get("is_pack"):
+                variant = next(
+                    (v for v in product.get("variants", [])
+                     if int(v.get("size_ml", 0)) == int(size_ml) and v.get("is_pack")),
+                    None,
+                )
+                available = int(variant.get("stock", 0)) if variant else 0
+                if available < quantity:
+                    raise ValueError("Insufficient stock for one or more items.")
+            else:
+                total_ml = int(size_ml) * quantity
+                if product.get("stock_ml") is None:
+                    computed = 0
+                    for v in product.get("variants", []):
+                        try:
+                            computed += int(v.get("size_ml", 0)) * int(v.get("stock", 0))
+                        except Exception:
+                            continue
+                    await self.products.update_one(
+                        {"_id": ObjectId(product_id)},
+                        {"$set": {"stock_ml": computed}},
+                    )
+                    product["stock_ml"] = computed
+                available = int(product.get("stock_ml", 0))
+                if available < total_ml:
+                    raise ValueError("Insufficient stock for one or more items.")
