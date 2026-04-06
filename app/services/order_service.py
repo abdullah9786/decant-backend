@@ -171,6 +171,13 @@ class OrderService:
                 if available < quantity:
                     raise ValueError("Insufficient stock for one or more items.")
             else:
+                variant = next(
+                    (v for v in product.get("variants", [])
+                     if int(v.get("size_ml", 0)) == int(size_ml) and not v.get("is_pack")),
+                    None,
+                )
+                if not variant:
+                    raise ValueError("Insufficient stock for one or more items.")
                 total_ml = int(size_ml) * quantity
                 if product.get("stock_ml") is None:
                     computed = 0
