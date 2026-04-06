@@ -11,9 +11,11 @@ class GiftBoxBase(BaseModel):
     description: str = ""
     image_url: Optional[str] = None
     images: List[str] = []
-    size_ml: int
-    slot_count: int
-    box_price: float
+    box_type: str = "fixed"
+    size_ml: int = 0
+    slot_count: int = 0
+    slot_sizes: List[int] = []
+    box_price: float = 0
     tier: str = "standard"
     is_active: bool = True
     stock: int = 0
@@ -30,8 +32,10 @@ class GiftBoxUpdate(BaseModel):
     description: Optional[str] = None
     image_url: Optional[str] = None
     images: Optional[List[str]] = None
+    box_type: Optional[str] = None
     size_ml: Optional[int] = None
     slot_count: Optional[int] = None
+    slot_sizes: Optional[List[int]] = None
     box_price: Optional[float] = None
     tier: Optional[str] = None
     is_active: Optional[bool] = None
