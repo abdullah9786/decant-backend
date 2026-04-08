@@ -21,6 +21,9 @@ class OrderItem(BaseModel):
     is_pack: bool = False
     gift_box_id: Optional[str] = None
     selected_products: Optional[List[GiftBoxSelectedProduct]] = None
+    bottle_id: Optional[str] = None
+    bottle_name: Optional[str] = None
+    bottle_price: float = 0
 
 
 class InitiatePaymentItem(BaseModel):
@@ -32,6 +35,7 @@ class InitiatePaymentItem(BaseModel):
     is_pack: bool = False
     gift_box_id: Optional[str] = None
     selected_products: Optional[List[GiftBoxSelectedProduct]] = None
+    bottle_id: Optional[str] = None
 
 
 class InitiatePaymentRequest(BaseModel):
