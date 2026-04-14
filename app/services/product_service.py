@@ -17,6 +17,7 @@ class ProductService:
         search: Optional[str] = None,
         sort_by: Optional[str] = None,
         include_inactive: bool = False,
+        category_id: Optional[str] = None,
     ):
         query: dict = {}
         if not include_inactive:
@@ -25,6 +26,8 @@ class ProductService:
             query["fragrance_family"] = fragrance_family
         if brand:
             query["brand"] = brand
+        if category_id:
+            query["category_ids"] = category_id
         if is_featured is not None:
             query["is_featured"] = is_featured
         if is_new_arrival is not None:

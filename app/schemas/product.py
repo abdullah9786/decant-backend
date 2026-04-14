@@ -30,6 +30,7 @@ class ProductBase(BaseModel):
     notes_middle_desc: Optional[str] = None
     notes_base_desc: Optional[str] = None
     bottle_ids: List[str] = []
+    category_ids: List[str] = []
 
 class ProductCreate(ProductBase):
     pass
@@ -54,6 +55,7 @@ class ProductUpdate(BaseModel):
     notes_middle_desc: Optional[str] = None
     notes_base_desc: Optional[str] = None
     bottle_ids: Optional[List[str]] = None
+    category_ids: Optional[List[str]] = None
 
 class ProductOut(ProductBase):
     id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
