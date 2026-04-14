@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config.config import settings
 from app.db.mongodb import connect_to_mongo, close_mongo_connection
-from app.routers import auth, products, orders, users_reviews, analytics, categories, brands, influencers, gift_boxes, bottles
+from app.routers import auth, products, orders, users_reviews, analytics, fragrance_families, brands, influencers, gift_boxes, bottles
 from contextlib import asynccontextmanager
 
 @asynccontextmanager
@@ -37,7 +37,7 @@ app.include_router(orders.router, prefix=settings.API_V1_STR)
 app.include_router(users_reviews.user_router, prefix=settings.API_V1_STR)
 app.include_router(users_reviews.review_router, prefix=settings.API_V1_STR)
 app.include_router(analytics.router, prefix=settings.API_V1_STR)
-app.include_router(categories.router, prefix=settings.API_V1_STR)
+app.include_router(fragrance_families.router, prefix=settings.API_V1_STR)
 app.include_router(brands.router, prefix=settings.API_V1_STR)
 app.include_router(influencers.router, prefix=settings.API_V1_STR)
 app.include_router(gift_boxes.router, prefix=settings.API_V1_STR)

@@ -54,20 +54,19 @@ async def get_stats(db: AsyncIOMotorDatabase = Depends(get_database), _admin=Dep
             "full_date": res["_id"]
         })
 
-    # 3. Category Mix (Synchronized with Categories Collection)
-    # Get official category names
-    official_cats_cursor = db["categories"].find({}, {"name": 1})
-    official_cats = await official_cats_cursor.to_list(length=100)
-    official_names = [cat["name"] for cat in official_cats]
+    # 3. Fragrance Family Mix
+    official_families_cursor = db["fragrance_families"].find({}, {"name": 1})
+    official_families = await official_families_cursor.to_list(length=100)
+    official_names = [f["name"] for f in official_families]
 
-    category_cursor = db["products"].aggregate([
-        {"$match": {"category": {"$in": official_names}}},
-        {"$group": {"_id": "$category", "value": {"$sum": 1}}},
+    family_cursor = db["products"].aggregate([
+        {"$match": {"fragrance_family": {"$in": official_names}}},
+        {"$group": {"_id": "$fragrance_family", "value": {"$sum": 1}}},
         {"$sort": {"value": -1}},
         {"$limit": 5}
     ])
-    category_results = await category_cursor.to_list(length=5)
-    formatted_categories = [{"name": res["_id"], "value": res["value"]} for res in category_results]
+    family_results = await family_cursor.to_list(length=5)
+    formatted_families = [{"name": res["_id"], "value": res["value"]} for res in family_results]
 
     # Calculate AOV
     aov = revenue / orders_count if orders_count > 0 else 0
@@ -79,7 +78,7 @@ async def get_stats(db: AsyncIOMotorDatabase = Depends(get_database), _admin=Dep
         "low_stock": low_stock_count,
         "aov": round(aov, 2),
         "daily_stats": formatted_daily,
-        "category_stats": formatted_categories,
+        "family_stats": formatted_families,
         "revenue_change": "+12.5%", # These could be calculated too, but keeping placeholders for now
         "orders_change": "+3.1%",
         "users_change": "+15.2%",

@@ -10,7 +10,7 @@ class ProductService:
 
     async def get_all(
         self,
-        category: Optional[str] = None,
+        fragrance_family: Optional[str] = None,
         brand: Optional[str] = None,
         is_featured: Optional[bool] = None,
         is_new_arrival: Optional[bool] = None,
@@ -21,8 +21,8 @@ class ProductService:
         query: dict = {}
         if not include_inactive:
             query["is_active"] = {"$ne": False}
-        if category:
-            query["category"] = category
+        if fragrance_family:
+            query["fragrance_family"] = fragrance_family
         if brand:
             query["brand"] = brand
         if is_featured is not None:

@@ -9,7 +9,7 @@ router = APIRouter(prefix="/products", tags=["products"])
 
 @router.get("", response_model=List[ProductOut])
 async def get_products(
-    category: Optional[str] = None, 
+    fragrance_family: Optional[str] = None, 
     brand: Optional[str] = None,
     is_featured: Optional[bool] = None,
     is_new_arrival: Optional[bool] = None,
@@ -19,7 +19,7 @@ async def get_products(
     db=Depends(get_database)
 ):
     product_service = ProductService(db)
-    return await product_service.get_all(category, brand, is_featured, is_new_arrival, q, sort_by, include_inactive)
+    return await product_service.get_all(fragrance_family, brand, is_featured, is_new_arrival, q, sort_by, include_inactive)
 
 @router.get("/{id}", response_model=ProductOut)
 async def get_product(id: str, db=Depends(get_database)):

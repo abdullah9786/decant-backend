@@ -14,7 +14,7 @@ class ProductBase(BaseModel):
     name: str
     brand: str
     description: str
-    category: str
+    fragrance_family: str
     image_url: Optional[str] = None
     images: List[str] = []
     variants: List[DecantVariant]
@@ -38,7 +38,7 @@ class ProductUpdate(BaseModel):
     name: Optional[str] = None
     brand: Optional[str] = None
     description: Optional[str] = None
-    category: Optional[str] = None
+    fragrance_family: Optional[str] = None
     image_url: Optional[str] = None
     images: Optional[List[str]] = None
     variants: Optional[List[DecantVariant]] = None

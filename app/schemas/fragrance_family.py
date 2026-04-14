@@ -4,18 +4,18 @@ from datetime import datetime
 from .user import PyObjectId
 from bson import ObjectId
 
-class CategoryBase(BaseModel):
+class FragranceFamilyBase(BaseModel):
     name: str
     description: Optional[str] = None
-    icon: Optional[str] = None # Lucide icon name or emoji
+    icon: Optional[str] = None
     image_url: Optional[str] = None
     is_featured: bool = False
     sort_order: int = 0
 
-class CategoryCreate(CategoryBase):
+class FragranceFamilyCreate(FragranceFamilyBase):
     pass
 
-class CategoryUpdate(BaseModel):
+class FragranceFamilyUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     icon: Optional[str] = None
@@ -23,7 +23,7 @@ class CategoryUpdate(BaseModel):
     is_featured: Optional[bool] = None
     sort_order: Optional[int] = None
 
-class CategoryOut(CategoryBase):
+class FragranceFamilyOut(FragranceFamilyBase):
     id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
     created_at: Optional[datetime] = Field(default_factory=datetime.utcnow)
 
