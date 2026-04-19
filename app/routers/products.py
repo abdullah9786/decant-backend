@@ -22,10 +22,10 @@ async def get_products(
     product_service = ProductService(db)
     return await product_service.get_all(fragrance_family, brand, is_featured, is_new_arrival, q, sort_by, include_inactive, category_id)
 
-@router.get("/{id}", response_model=ProductOut)
-async def get_product(id: str, db=Depends(get_database)):
+@router.get("/{id_or_slug}", response_model=ProductOut)
+async def get_product(id_or_slug: str, db=Depends(get_database)):
     product_service = ProductService(db)
-    product = await product_service.get_by_id(id)
+    product = await product_service.get_by_id_or_slug(id_or_slug)
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
     return product

@@ -3,10 +3,34 @@ from app.schemas.product import ProductCreate, ProductUpdate
 from bson import ObjectId
 from typing import List, Optional
 from datetime import datetime
+import re
+import unicodedata
+
+
+def _slugify(text: str) -> str:
+    text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
+    text = text.lower().strip()
+    text = re.sub(r"[^\w\s-]", "", text)
+    text = re.sub(r"[-\s]+", "-", text)
+    return text.strip("-")
+
 
 class ProductService:
     def __init__(self, db: AsyncIOMotorDatabase):
         self.collection = db["products"]
+
+    async def _unique_slug(self, base_slug: str, exclude_id: Optional[str] = None) -> str:
+        slug = base_slug
+        counter = 1
+        while True:
+            query: dict = {"slug": slug}
+            if exclude_id:
+                query["_id"] = {"$ne": ObjectId(exclude_id)}
+            existing = await self.collection.find_one(query, {"_id": 1})
+            if not existing:
+                return slug
+            slug = f"{base_slug}-{counter}"
+            counter += 1
 
     async def get_all(
         self,
@@ -55,14 +79,33 @@ class ProductService:
         product = await self.collection.find_one({"_id": ObjectId(product_id)})
         return await self._ensure_stock_ml(product)
 
+    async def get_by_slug(self, slug: str):
+        product = await self.collection.find_one({"slug": slug})
+        return await self._ensure_stock_ml(product)
+
+    async def get_by_id_or_slug(self, identifier: str):
+        if ObjectId.is_valid(identifier):
+            product = await self.get_by_id(identifier)
+            if product:
+                return product
+        return await self.get_by_slug(identifier)
+
     async def create(self, product_in: ProductCreate):
         product_dict = product_in.dict()
         product_dict["created_at"] = product_dict.get("created_at") or datetime.utcnow()
+        base_slug = _slugify(f"{product_dict['name']} {product_dict['brand']}")
+        product_dict["slug"] = await self._unique_slug(base_slug)
         product_result = await self.collection.insert_one(product_dict)
         return await self.get_by_id(str(product_result.inserted_id))
 
     async def update(self, product_id: str, product_in: ProductUpdate):
         update_data = {k: v for k, v in product_in.dict(exclude_unset=True).items()}
+        if "name" in update_data or "brand" in update_data:
+            current = await self.collection.find_one({"_id": ObjectId(product_id)}, {"name": 1, "brand": 1})
+            name = update_data.get("name", current.get("name", ""))
+            brand = update_data.get("brand", current.get("brand", ""))
+            base_slug = _slugify(f"{name} {brand}")
+            update_data["slug"] = await self._unique_slug(base_slug, exclude_id=product_id)
         await self.collection.update_one(
             {"_id": ObjectId(product_id)}, {"$set": update_data}
         )

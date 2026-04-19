@@ -13,6 +13,7 @@ class DecantVariant(BaseModel):
 class ProductBase(BaseModel):
     name: str
     brand: str
+    slug: Optional[str] = None
     description: str
     fragrance_family: str
     image_url: Optional[str] = None
@@ -38,6 +39,7 @@ class ProductCreate(ProductBase):
 class ProductUpdate(BaseModel):
     name: Optional[str] = None
     brand: Optional[str] = None
+    slug: Optional[str] = None
     description: Optional[str] = None
     fragrance_family: Optional[str] = None
     image_url: Optional[str] = None
