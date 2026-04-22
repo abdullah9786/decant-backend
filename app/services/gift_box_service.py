@@ -2,7 +2,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.schemas.gift_box import GiftBoxCreate, GiftBoxUpdate
 from bson import ObjectId
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 class GiftBoxService:
@@ -24,7 +24,7 @@ class GiftBoxService:
 
     async def create(self, box_in: GiftBoxCreate):
         box_dict = box_in.dict()
-        box_dict["created_at"] = datetime.utcnow()
+        box_dict["created_at"] = datetime.now(timezone.utc)
         result = await self.collection.insert_one(box_dict)
         return await self.collection.find_one({"_id": result.inserted_id})
 

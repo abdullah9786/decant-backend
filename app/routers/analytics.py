@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends
 from app.db.mongodb import get_database
 from motor.motor_asyncio import AsyncIOMotorDatabase
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict
 from app.utils.deps import require_admin
 
@@ -28,7 +28,7 @@ async def get_stats(db: AsyncIOMotorDatabase = Depends(get_database), _admin=Dep
     })
     
     # 2. Daily Sales & Orders (Last 7 days)
-    seven_days_ago = datetime.utcnow() - timedelta(days=7)
+    seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
     daily_cursor = db["orders"].aggregate([
         {"$match": {"created_at": {"$gte": seven_days_ago}, "status": {"$nin": ["cancelled", "refunded"]}}},
         {

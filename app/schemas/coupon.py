@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from .user import PyObjectId
 from bson import ObjectId
 
@@ -26,7 +26,7 @@ class CouponUpdate(BaseModel):
 class CouponOut(CouponBase):
     id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
     times_used: int = 0
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     class Config:
         populate_by_name = True

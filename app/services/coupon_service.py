@@ -1,6 +1,6 @@
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from bson import ObjectId
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 class CouponService:
@@ -25,7 +25,7 @@ class CouponService:
             "is_active": True,
             "max_uses": data.get("max_uses"),
             "times_used": 0,
-            "created_at": datetime.utcnow(),
+            "created_at": datetime.now(timezone.utc),
         }
         result = await self.coupons.insert_one(doc)
         return await self.coupons.find_one({"_id": result.inserted_id})

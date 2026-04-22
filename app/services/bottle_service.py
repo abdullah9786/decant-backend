@@ -1,7 +1,7 @@
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.schemas.bottle import BottleCreate, BottleUpdate
 from bson import ObjectId
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 class BottleService:
@@ -27,7 +27,7 @@ class BottleService:
         doc = data.dict()
         if doc.get("is_default"):
             await self.collection.update_many({}, {"$set": {"is_default": False}})
-        doc["created_at"] = datetime.utcnow()
+        doc["created_at"] = datetime.now(timezone.utc)
         result = await self.collection.insert_one(doc)
         return await self.collection.find_one({"_id": result.inserted_id})
 

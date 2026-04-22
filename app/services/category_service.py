@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from bson import ObjectId
 from app.schemas.category import CategoryCreate, CategoryUpdate
@@ -20,7 +20,7 @@ class CategoryService:
 
     async def create(self, cat_in: CategoryCreate):
         cat_dict = cat_in.model_dump()
-        cat_dict["created_at"] = datetime.utcnow()
+        cat_dict["created_at"] = datetime.now(timezone.utc)
         result = await self.collection.insert_one(cat_dict)
         return await self.get_by_id(str(result.inserted_id))
 

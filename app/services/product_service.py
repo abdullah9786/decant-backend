@@ -2,7 +2,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.schemas.product import ProductCreate, ProductUpdate
 from bson import ObjectId
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 import re
 import unicodedata
 
@@ -92,7 +92,7 @@ class ProductService:
 
     async def create(self, product_in: ProductCreate):
         product_dict = product_in.dict()
-        product_dict["created_at"] = product_dict.get("created_at") or datetime.utcnow()
+        product_dict["created_at"] = product_dict.get("created_at") or datetime.now(timezone.utc)
         base_slug = _slugify(f"{product_dict['name']} {product_dict['brand']}")
         product_dict["slug"] = await self._unique_slug(base_slug)
         product_result = await self.collection.insert_one(product_dict)

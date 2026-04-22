@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from bson import ObjectId
 from app.schemas.brand import BrandCreate, BrandUpdate
@@ -17,7 +17,7 @@ class BrandService:
 
     async def create(self, brand_in: BrandCreate):
         brand_dict = brand_in.model_dump()
-        brand_dict["created_at"] = datetime.utcnow()
+        brand_dict["created_at"] = datetime.now(timezone.utc)
         result = await self.collection.insert_one(brand_dict)
         return await self.get_by_id(str(result.inserted_id))
 

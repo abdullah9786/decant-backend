@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from .user import PyObjectId
 from bson import ObjectId
 
@@ -16,7 +16,7 @@ class ReviewCreate(ReviewBase):
 
 class ReviewOut(ReviewBase):
     id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     class Config:
         populate_by_name = True

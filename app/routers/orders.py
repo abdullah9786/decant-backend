@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, Request, status, HTTPException
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Dict, Any
 import hashlib
 import hmac
@@ -87,7 +87,7 @@ async def customer_cancel_order(
         return {"ok": True, "message": "Order is already cancelled."}
 
     created_at = order.get("created_at")
-    if not created_at or (datetime.utcnow() - created_at) > timedelta(hours=24):
+    if not created_at or (datetime.now(timezone.utc) - created_at) > timedelta(hours=24):
         raise HTTPException(status_code=400, detail="Cancellation window (24 hours) has expired.")
 
     if order.get("status") not in ("pending", "processing"):
@@ -136,11 +136,13 @@ async def customer_cancel_order(
 
     # Restore stock
     await order_service.restore_stock(order.get("items", []))
+    if order.get("free_decants"):
+        await order_service._restore_free_decant_stock(order["free_decants"])
 
     # Update order document
     update_fields: dict = {
         "status": "cancelled",
-        "cancelled_at": datetime.utcnow(),
+        "cancelled_at": datetime.now(timezone.utc),
         "cancelled_by": "customer",
         "cancellation_reason": "Customer cancel (24h window)",
     }
@@ -192,7 +194,7 @@ async def customer_cancel_order(
 
 @router.get("/abandoned-checkouts")
 async def get_abandoned_checkouts(db=Depends(get_database), _admin=Depends(require_admin)):
-    cutoff = datetime.utcnow() - timedelta(minutes=30)
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=30)
     cursor = db["pending_checkouts"].find({
         "status": "pending",
         "created_at": {"$lt": cutoff},
@@ -308,7 +310,7 @@ async def initiate_payment_only(body: InitiatePaymentRequest, db=Depends(get_dat
         await order_service.ensure_stock_for_checkout(items_dicts)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    receipt = f"pre_{int(datetime.utcnow().timestamp())}"
+    receipt = f"pre_{int(datetime.now(timezone.utc).timestamp())}"
     try:
         rzp_order = await order_service.create_razorpay_order(body.amount, receipt)
     except Exception as e:
@@ -321,7 +323,7 @@ async def initiate_payment_only(body: InitiatePaymentRequest, db=Depends(get_dat
                 "razorpay_order_id": rzp_order["id"],
                 "order_data": body.order_data,
                 "status": "pending",
-                "created_at": datetime.utcnow(),
+                "created_at": datetime.now(timezone.utc),
                 "converted_at": None,
                 "order_id": None,
             }},
@@ -355,6 +357,16 @@ async def verify_and_create(
         "payment_details.razorpay_order_id": data.payment_details.razorpay_order_id
     })
     if existing:
+        patch: dict = {}
+        incoming_fd = data.order_data.free_decants if data.order_data.free_decants else None
+        if incoming_fd and not existing.get("free_decants"):
+            patch["free_decants"] = [fd.dict() if hasattr(fd, "dict") else fd.model_dump() for fd in incoming_fd]
+        existing_ca = existing.get("created_at")
+        if existing_ca and hasattr(existing_ca, "tzinfo") and existing_ca.tzinfo is None:
+            patch["created_at"] = existing_ca.replace(tzinfo=timezone.utc)
+        if patch:
+            await db["orders"].update_one({"_id": existing["_id"]}, {"$set": patch})
+            existing.update(patch)
         return existing
 
     # 2. Prepare Order Data
@@ -371,7 +383,7 @@ async def verify_and_create(
         "razorpay_order_id": data.payment_details.razorpay_order_id,
         "razorpay_payment_id": data.payment_details.razorpay_payment_id,
         "razorpay_signature": data.payment_details.razorpay_signature,
-        "paid_at": datetime.utcnow().isoformat()
+        "paid_at": datetime.now(timezone.utc).isoformat()
     }
 
     # 2b. If a coupon code was provided, validate and attribute to influencer
@@ -395,7 +407,7 @@ async def verify_and_create(
             {"razorpay_order_id": data.payment_details.razorpay_order_id},
             {"$set": {
                 "status": "converted",
-                "converted_at": datetime.utcnow(),
+                "converted_at": datetime.now(timezone.utc),
                 "order_id": str(new_order["_id"]),
             }},
         )
@@ -516,7 +528,7 @@ async def razorpay_webhook(request: Request, db=Depends(get_database)):
     od["payment_details"] = {
         "razorpay_order_id": rzp_order_id,
         "razorpay_payment_id": rzp_payment_id,
-        "paid_at": datetime.utcnow().isoformat(),
+        "paid_at": datetime.now(timezone.utc).isoformat(),
         "source": "webhook",
     }
 
@@ -534,7 +546,7 @@ async def razorpay_webhook(request: Request, db=Depends(get_database)):
         {"razorpay_order_id": rzp_order_id},
         {"$set": {
             "status": "converted",
-            "converted_at": datetime.utcnow(),
+            "converted_at": datetime.now(timezone.utc),
             "order_id": str(new_order["_id"]),
         }},
     )

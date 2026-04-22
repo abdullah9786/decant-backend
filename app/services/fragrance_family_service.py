@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from bson import ObjectId
 from app.schemas.fragrance_family import FragranceFamilyCreate, FragranceFamilyUpdate
@@ -16,7 +16,7 @@ class FragranceFamilyService:
 
     async def create(self, family_in: FragranceFamilyCreate):
         family_dict = family_in.model_dump()
-        family_dict["created_at"] = datetime.utcnow()
+        family_dict["created_at"] = datetime.now(timezone.utc)
         result = await self.collection.insert_one(family_dict)
         return await self.get_by_id(str(result.inserted_id))
 

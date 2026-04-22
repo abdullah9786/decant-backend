@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from .user import PyObjectId
 from bson import ObjectId
 
@@ -25,7 +25,7 @@ class FragranceFamilyUpdate(BaseModel):
 
 class FragranceFamilyOut(FragranceFamilyBase):
     id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
-    created_at: Optional[datetime] = Field(default_factory=datetime.utcnow)
+    created_at: Optional[datetime] = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     model_config = {
         "populate_by_name": True,

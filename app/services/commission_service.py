@@ -1,6 +1,6 @@
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from bson import ObjectId
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 
@@ -34,7 +34,7 @@ class CommissionService:
             "commission_amount": round(order_total * rate, 2),
             "status": "pending",
             "payout_id": None,
-            "created_at": datetime.utcnow(),
+            "created_at": datetime.now(timezone.utc),
             "approved_at": None,
             "paid_at": None,
         }
@@ -52,7 +52,7 @@ class CommissionService:
 
         await self.commissions.update_one(
             {"_id": ObjectId(commission_id)},
-            {"$set": {"status": "approved", "approved_at": datetime.utcnow()}},
+            {"$set": {"status": "approved", "approved_at": datetime.now(timezone.utc)}},
         )
         return await self.commissions.find_one({"_id": ObjectId(commission_id)})
 
@@ -130,16 +130,16 @@ class CommissionService:
             "commission_ids": commission_ids,
             "method": method,
             "status": "pending",
-            "scheduled_date": datetime.utcnow(),
+            "scheduled_date": datetime.now(timezone.utc),
             "completed_at": None,
-            "created_at": datetime.utcnow(),
+            "created_at": datetime.now(timezone.utc),
         }
         result = await self.payouts.insert_one(payout_doc)
         payout_id = str(result.inserted_id)
 
         await self.commissions.update_many(
             {"_id": {"$in": [ObjectId(cid) for cid in commission_ids]}},
-            {"$set": {"status": "paid", "payout_id": payout_id, "paid_at": datetime.utcnow()}},
+            {"$set": {"status": "paid", "payout_id": payout_id, "paid_at": datetime.now(timezone.utc)}},
         )
 
         return await self.payouts.find_one({"_id": result.inserted_id})
@@ -150,7 +150,7 @@ class CommissionService:
             return None
         await self.payouts.update_one(
             {"_id": ObjectId(payout_id)},
-            {"$set": {"status": "completed", "completed_at": datetime.utcnow()}},
+            {"$set": {"status": "completed", "completed_at": datetime.now(timezone.utc)}},
         )
         return await self.payouts.find_one({"_id": ObjectId(payout_id)})
 
@@ -181,7 +181,7 @@ class CommissionService:
             return 0
         result = await self.commissions.update_many(
             {"_id": {"$in": eligible}},
-            {"$set": {"status": "approved", "approved_at": datetime.utcnow()}},
+            {"$set": {"status": "approved", "approved_at": datetime.now(timezone.utc)}},
         )
         return result.modified_count
 
@@ -200,7 +200,7 @@ class CommissionService:
             return 0
         result = await self.commissions.update_many(
             {"_id": {"$in": eligible}},
-            {"$set": {"status": "approved", "approved_at": datetime.utcnow()}},
+            {"$set": {"status": "approved", "approved_at": datetime.now(timezone.utc)}},
         )
         return result.modified_count
 
@@ -242,16 +242,16 @@ class CommissionService:
                 "commission_ids": commission_ids,
                 "method": method,
                 "status": "pending",
-                "scheduled_date": datetime.utcnow(),
+                "scheduled_date": datetime.now(timezone.utc),
                 "completed_at": None,
-                "created_at": datetime.utcnow(),
+                "created_at": datetime.now(timezone.utc),
             }
             result = await self.payouts.insert_one(payout_doc)
             payout_id = str(result.inserted_id)
 
             await self.commissions.update_many(
                 {"_id": {"$in": [ObjectId(cid) for cid in commission_ids]}},
-                {"$set": {"status": "paid", "payout_id": payout_id, "paid_at": datetime.utcnow()}},
+                {"$set": {"status": "paid", "payout_id": payout_id, "paid_at": datetime.now(timezone.utc)}},
             )
 
             payout = await self.payouts.find_one({"_id": result.inserted_id})
@@ -263,7 +263,7 @@ class CommissionService:
         """Complete all pending payouts for a given influencer. Returns count completed."""
         result = await self.payouts.update_many(
             {"influencer_id": influencer_id, "status": "pending"},
-            {"$set": {"status": "completed", "completed_at": datetime.utcnow()}},
+            {"$set": {"status": "completed", "completed_at": datetime.now(timezone.utc)}},
         )
         return result.modified_count
 

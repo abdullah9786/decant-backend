@@ -2,10 +2,11 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.schemas.order import OrderCreate, OrderUpdate
 from bson import ObjectId
 from typing import List
-from datetime import datetime
+from datetime import datetime, timezone
 import razorpay
 from app.config.config import settings
 from app.services.mail_service import MailService
+from app.services.offer_service import OfferService
 
 class OrderService:
     def __init__(self, db: AsyncIOMotorDatabase):
@@ -64,10 +65,16 @@ class OrderService:
 
     async def create(self, order_in: OrderCreate):
         order_dict = order_in.dict()
-        order_dict["created_at"] = order_dict.get("created_at") or datetime.utcnow()
+        order_dict["created_at"] = order_dict.get("created_at") or datetime.now(timezone.utc)
         await self._ensure_stock(order_dict.get("items", []))
+        free_decants = order_dict.get("free_decants") or []
+        if free_decants:
+            await self._validate_free_decants(order_dict.get("items", []), free_decants)
+            await self._ensure_free_decant_stock(free_decants)
         result = await self.collection.insert_one(order_dict)
         await self._decrement_stock(order_dict.get("items", []))
+        if free_decants:
+            await self._decrement_free_decant_stock(free_decants)
         return await self.collection.find_one({"_id": result.inserted_id})
 
     async def get_all(self, user_id: str = None):
@@ -256,3 +263,77 @@ class OrderService:
                 available = int(product.get("stock_ml", 0))
                 if available < total_ml:
                     raise ValueError("Insufficient stock for one or more items.")
+
+    async def _validate_free_decants(self, items: List[dict], free_decants: List[dict]):
+        offer_service = OfferService(self.products.database)
+        offer = await offer_service.get_active_by_type("free_decant")
+        if not offer:
+            raise ValueError("No active free decant offer.")
+
+        config = offer.get("config", {})
+        min_ml = int(config.get("min_qualifying_ml", 10))
+        max_free = config.get("max_free_per_order")
+        eligible_ids = set(config.get("eligible_product_ids", []))
+        qualifying_type = config.get("qualifying_type", "decant")
+
+        qualifying_count = 0
+        for it in items:
+            if it.get("gift_box_id"):
+                continue
+            item_is_pack = bool(it.get("is_pack"))
+            if qualifying_type == "decant" and item_is_pack:
+                continue
+            if qualifying_type == "sealed" and not item_is_pack:
+                continue
+            if int(it.get("size_ml", 0)) >= min_ml:
+                qualifying_count += int(it.get("quantity", 0))
+
+        entitled = qualifying_count
+        if max_free is not None:
+            entitled = min(entitled, int(max_free))
+
+        if len(free_decants) > entitled:
+            raise ValueError(
+                f"You are entitled to {entitled} free decant(s), but submitted {len(free_decants)}."
+            )
+
+        for fd in free_decants:
+            if fd.get("product_id") not in eligible_ids:
+                raise ValueError(
+                    f"Product {fd.get('product_id')} is not eligible for the free decant offer."
+                )
+
+    async def _ensure_free_decant_stock(self, free_decants: List[dict]):
+        for fd in free_decants:
+            product_id = fd.get("product_id")
+            size_ml = int(fd.get("size_ml", 2))
+            product = await self.products.find_one({"_id": ObjectId(product_id)})
+            if not product:
+                raise ValueError("Free decant product not found.")
+            available = int(product.get("stock_ml", 0))
+            if available < size_ml:
+                raise ValueError(f"Insufficient stock for free decant: {fd.get('name', product_id)}")
+
+    async def _decrement_free_decant_stock(self, free_decants: List[dict]):
+        for fd in free_decants:
+            product_id = fd.get("product_id")
+            size_ml = int(fd.get("size_ml", 2))
+            try:
+                await self.products.update_one(
+                    {"_id": ObjectId(product_id), "stock_ml": {"$gte": size_ml}},
+                    {"$inc": {"stock_ml": -size_ml}},
+                )
+            except Exception:
+                continue
+
+    async def _restore_free_decant_stock(self, free_decants: List[dict]):
+        for fd in free_decants:
+            product_id = fd.get("product_id")
+            size_ml = int(fd.get("size_ml", 2))
+            try:
+                await self.products.update_one(
+                    {"_id": ObjectId(product_id)},
+                    {"$inc": {"stock_ml": size_ml}},
+                )
+            except Exception:
+                continue

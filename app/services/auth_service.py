@@ -86,7 +86,7 @@ class AuthService:
         user_dict["is_verified"] = False
         token = self._generate_verification_token()
         user_dict["verification_token"] = token
-        user_dict["verification_expires_at"] = datetime.utcnow() + timedelta(hours=24)
+        user_dict["verification_expires_at"] = datetime.now(timezone.utc) + timedelta(hours=24)
         user_result = await self.collection.insert_one(user_dict)
         await self.mail_service.send_verification_email(user_in.email, user_in.full_name, token)
         return await self.collection.find_one({"_id": user_result.inserted_id})
@@ -115,7 +115,7 @@ class AuthService:
         if not user:
             return False
         expires = user.get("verification_expires_at")
-        if expires and expires < datetime.utcnow():
+        if expires and expires < datetime.now(timezone.utc):
             return False
         await self.collection.update_one(
             {"_id": user["_id"]},
@@ -132,7 +132,7 @@ class AuthService:
         token = self._generate_verification_token()
         await self.collection.update_one(
             {"_id": user["_id"]},
-            {"$set": {"verification_token": token, "verification_expires_at": datetime.utcnow() + timedelta(hours=24)}},
+            {"$set": {"verification_token": token, "verification_expires_at": datetime.now(timezone.utc) + timedelta(hours=24)}},
         )
         await self.mail_service.send_verification_email(email, user.get("full_name"), token)
         return True
@@ -144,7 +144,7 @@ class AuthService:
         token = self._generate_verification_token()
         await self.collection.update_one(
             {"_id": user["_id"]},
-            {"$set": {"reset_token": token, "reset_expires_at": datetime.utcnow() + timedelta(hours=2)}},
+            {"$set": {"reset_token": token, "reset_expires_at": datetime.now(timezone.utc) + timedelta(hours=2)}},
         )
         await self.mail_service.send_reset_email(email, user.get("full_name"), token)
 
@@ -155,7 +155,7 @@ class AuthService:
         if not user:
             return False
         expires = user.get("reset_expires_at")
-        if expires and expires < datetime.utcnow():
+        if expires and expires < datetime.now(timezone.utc):
             return False
         hashed = get_password_hash(new_password)
         await self.collection.update_one(

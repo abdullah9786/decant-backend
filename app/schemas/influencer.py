@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict
-from datetime import datetime
+from datetime import datetime, timezone
 from .user import PyObjectId
 from bson import ObjectId
 
@@ -39,8 +39,8 @@ class InfluencerProfileUpdate(BaseModel):
 class InfluencerProfileOut(InfluencerProfileBase):
     id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
     user_id: str
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     class Config:
         populate_by_name = True
@@ -78,7 +78,7 @@ class SectionOut(BaseModel):
     note_names: List[str] = []
     sort_order: int = 0
     is_active: bool = True
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     class Config:
         populate_by_name = True
@@ -96,7 +96,7 @@ class CommissionOut(BaseModel):
     status: str = "pending"
     payout_id: Optional[str] = None
     cancellation_reason: Optional[str] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     approved_at: Optional[datetime] = None
     paid_at: Optional[datetime] = None
 
@@ -132,7 +132,7 @@ class PayoutOut(BaseModel):
     status: str = "pending"
     scheduled_date: Optional[datetime] = None
     completed_at: Optional[datetime] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     class Config:
         populate_by_name = True

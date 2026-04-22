@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 from .user import PyObjectId
 from bson import ObjectId
 
@@ -24,6 +24,13 @@ class OrderItem(BaseModel):
     bottle_id: Optional[str] = None
     bottle_name: Optional[str] = None
     bottle_price: float = 0
+
+
+class FreeDecantItem(BaseModel):
+    product_id: str
+    name: str = ""
+    size_ml: int = 2
+    offer_id: str = ""
 
 
 class InitiatePaymentItem(BaseModel):
@@ -58,6 +65,7 @@ class OrderBase(BaseModel):
     referral_code: Optional[str] = None
     coupon_code: Optional[str] = None
     discount_amount: Optional[float] = None
+    free_decants: Optional[List[FreeDecantItem]] = None
 
 class OrderCreate(OrderBase):
     pass
@@ -71,7 +79,7 @@ class OrderUpdate(BaseModel):
 
 class OrderOut(OrderBase):
     id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     class Config:
         populate_by_name = True
@@ -87,7 +95,8 @@ class OrderTrackOut(BaseModel):
     payment_status: Optional[str] = None
     items: List[OrderItem]
     total_amount: float
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    free_decants: Optional[List[FreeDecantItem]] = None
     cancelled_at: Optional[datetime] = None
     cancelled_by: Optional[str] = None
     cancellation_reason: Optional[str] = None

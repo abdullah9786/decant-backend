@@ -4,7 +4,7 @@ from app.schemas.influencer import (
     SectionCreate, SectionUpdate,
 )
 from bson import ObjectId
-from datetime import datetime
+from datetime import datetime, timezone
 import re
 
 RESERVED_USERNAMES = {
@@ -55,7 +55,7 @@ class InfluencerService:
             {"$set": {"is_influencer": True}},
         )
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         doc = {
             "user_id": data.user_id,
             "username": username,
@@ -86,7 +86,7 @@ class InfluencerService:
         update_data = {k: v for k, v in data.dict(exclude_unset=True).items()}
         if not update_data:
             return await self.get_profile_by_id(profile_id)
-        update_data["updated_at"] = datetime.utcnow()
+        update_data["updated_at"] = datetime.now(timezone.utc)
         await self.profiles.update_one(
             {"_id": ObjectId(profile_id)},
             {"$set": update_data},
@@ -100,7 +100,7 @@ class InfluencerService:
         new_status = not profile.get("is_active", True)
         await self.profiles.update_one(
             {"_id": ObjectId(profile_id)},
-            {"$set": {"is_active": new_status, "updated_at": datetime.utcnow()}},
+            {"$set": {"is_active": new_status, "updated_at": datetime.now(timezone.utc)}},
         )
         return await self.get_profile_by_id(profile_id)
 
@@ -127,7 +127,7 @@ class InfluencerService:
             "note_names": data.note_names,
             "sort_order": next_order,
             "is_active": True,
-            "created_at": datetime.utcnow(),
+            "created_at": datetime.now(timezone.utc),
         }
         result = await self.sections.insert_one(doc)
         return await self.sections.find_one({"_id": result.inserted_id})
