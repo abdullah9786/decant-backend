@@ -31,6 +31,8 @@ class RazorpayOrderResponse(BaseModel):
     currency: str
     receipt: str
     status: str
+    free_decants_removed: bool = False
+    free_decants_removed_reason: Optional[str] = None
 
 class PaymentVerifyRequest(BaseModel):
     razorpay_order_id: str
@@ -310,27 +312,50 @@ async def initiate_payment_only(body: InitiatePaymentRequest, db=Depends(get_dat
         await order_service.ensure_stock_for_checkout(items_dicts)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+    free_decants_removed = False
+    free_decants_removed_reason: Optional[str] = None
+    order_data = body.order_data
+    if order_data and order_data.get("free_decants"):
+        try:
+            await order_service._validate_free_decants(
+                order_data.get("items", []),
+                order_data.get("free_decants", []),
+            )
+            await order_service._ensure_free_decant_stock(order_data.get("free_decants", []))
+        except ValueError as e:
+            order_data["free_decants"] = []
+            order_data["free_decants_dropped_reason"] = str(e)
+            free_decants_removed = True
+            free_decants_removed_reason = str(e)
+
     receipt = f"pre_{int(datetime.now(timezone.utc).timestamp())}"
     try:
         rzp_order = await order_service.create_razorpay_order(body.amount, receipt)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    if body.order_data:
+    if order_data:
         await db["pending_checkouts"].update_one(
             {"razorpay_order_id": rzp_order["id"]},
             {"$set": {
                 "razorpay_order_id": rzp_order["id"],
-                "order_data": body.order_data,
+                "order_data": order_data,
                 "status": "pending",
                 "created_at": datetime.now(timezone.utc),
                 "converted_at": None,
                 "order_id": None,
+                "free_decants_removed": free_decants_removed,
+                "free_decants_removed_reason": free_decants_removed_reason,
             }},
             upsert=True,
         )
 
-    return rzp_order
+    return {
+        **rzp_order,
+        "free_decants_removed": free_decants_removed,
+        "free_decants_removed_reason": free_decants_removed_reason,
+    }
 
 @router.post("/verify-and-create", response_model=OrderOut)
 async def verify_and_create(

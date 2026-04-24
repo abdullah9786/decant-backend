@@ -66,6 +66,7 @@ class OrderBase(BaseModel):
     coupon_code: Optional[str] = None
     discount_amount: Optional[float] = None
     free_decants: Optional[List[FreeDecantItem]] = None
+    free_decants_dropped_reason: Optional[str] = None
 
 class OrderCreate(OrderBase):
     pass
@@ -97,6 +98,7 @@ class OrderTrackOut(BaseModel):
     total_amount: float
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     free_decants: Optional[List[FreeDecantItem]] = None
+    free_decants_dropped_reason: Optional[str] = None
     cancelled_at: Optional[datetime] = None
     cancelled_by: Optional[str] = None
     cancellation_reason: Optional[str] = None

@@ -69,8 +69,17 @@ class OrderService:
         await self._ensure_stock(order_dict.get("items", []))
         free_decants = order_dict.get("free_decants") or []
         if free_decants:
-            await self._validate_free_decants(order_dict.get("items", []), free_decants)
-            await self._ensure_free_decant_stock(free_decants)
+            try:
+                await self._validate_free_decants(order_dict.get("items", []), free_decants)
+                await self._ensure_free_decant_stock(free_decants)
+            except ValueError as e:
+                # Offer ended (or eligibility otherwise lost) between checkout
+                # and payment capture — drop free decants gracefully so the
+                # paid order still goes through. Customer is notified via the
+                # `free_decants_dropped_reason` field in the order.
+                order_dict["free_decants"] = []
+                order_dict["free_decants_dropped_reason"] = str(e)
+                free_decants = []
         result = await self.collection.insert_one(order_dict)
         await self._decrement_stock(order_dict.get("items", []))
         if free_decants:

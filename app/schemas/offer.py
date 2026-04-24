@@ -10,6 +10,8 @@ class OfferBase(BaseModel):
     slug: Optional[str] = None
     type: str = "free_decant"
     is_active: bool = True
+    starts_at: Optional[datetime] = None
+    ends_at: Optional[datetime] = None
     config: Dict[str, Any] = {}
     display: Dict[str, Any] = {}
 
@@ -23,6 +25,8 @@ class OfferUpdate(BaseModel):
     slug: Optional[str] = None
     type: Optional[str] = None
     is_active: Optional[bool] = None
+    starts_at: Optional[datetime] = None
+    ends_at: Optional[datetime] = None
     config: Optional[Dict[str, Any]] = None
     display: Optional[Dict[str, Any]] = None
 

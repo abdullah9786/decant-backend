@@ -20,16 +20,35 @@ class OfferService:
     def __init__(self, db: AsyncIOMotorDatabase):
         self.collection = db["offers"]
 
+    def _active_query(self, extra: Optional[dict] = None) -> dict:
+        """Build a query that matches offers that are currently within their active window.
+
+        - is_active must be True.
+        - starts_at must be null (start now) or in the past.
+        - ends_at must be null (no end / manual stop) or in the future.
+        """
+        now = datetime.now(timezone.utc)
+        query: dict = {
+            "is_active": True,
+            "$and": [
+                {"$or": [{"starts_at": None}, {"starts_at": {"$lte": now}}]},
+                {"$or": [{"ends_at": None}, {"ends_at": {"$gt": now}}]},
+            ],
+        }
+        if extra:
+            query.update(extra)
+        return query
+
     async def get_all(self):
         cursor = self.collection.find().sort("created_at", -1)
         return await cursor.to_list(length=200)
 
     async def get_active(self):
-        cursor = self.collection.find({"is_active": True}).sort("created_at", -1)
+        cursor = self.collection.find(self._active_query()).sort("created_at", -1)
         return await cursor.to_list(length=200)
 
     async def get_active_by_type(self, offer_type: str):
-        return await self.collection.find_one({"type": offer_type, "is_active": True})
+        return await self.collection.find_one(self._active_query({"type": offer_type}))
 
     async def get_by_id(self, offer_id: str):
         return await self.collection.find_one({"_id": ObjectId(offer_id)})
