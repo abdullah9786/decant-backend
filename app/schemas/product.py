@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
 from .user import PyObjectId
 from bson import ObjectId
@@ -32,6 +32,7 @@ class ProductBase(BaseModel):
     notes_base_desc: Optional[str] = None
     bottle_ids: List[str] = []
     category_ids: List[str] = []
+    chip_ids: List[str] = []
 
 class ProductCreate(ProductBase):
     pass
@@ -58,11 +59,19 @@ class ProductUpdate(BaseModel):
     notes_base_desc: Optional[str] = None
     bottle_ids: Optional[List[str]] = None
     category_ids: Optional[List[str]] = None
+    chip_ids: Optional[List[str]] = None
 
 class ProductOut(ProductBase):
     id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    chips: List[Dict[str, Any]] = []
 
     class Config:
         populate_by_name = True
         json_encoders = {ObjectId: str}
+
+
+class BulkChipUpdate(BaseModel):
+    product_ids: List[str]
+    add: List[str] = []
+    remove: List[str] = []

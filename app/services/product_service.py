@@ -1,5 +1,6 @@
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.schemas.product import ProductCreate, ProductUpdate
+from app.services.chip_service import ChipService
 from bson import ObjectId
 from typing import List, Optional
 from datetime import datetime, timezone
@@ -17,7 +18,9 @@ def _slugify(text: str) -> str:
 
 class ProductService:
     def __init__(self, db: AsyncIOMotorDatabase):
+        self.db = db
         self.collection = db["products"]
+        self.chip_service = ChipService(db)
 
     async def _unique_slug(self, base_slug: str, exclude_id: Optional[str] = None) -> str:
         slug = base_slug
@@ -70,18 +73,22 @@ class ProductService:
         else:
             cursor = cursor.sort([("sort_order", 1), ("created_at", -1)])
         products = await cursor.to_list(length=100)
+        active_chips_by_id = await self._fetch_active_chips_by_id()
         normalized = []
         for product in products:
-            normalized.append(await self._ensure_stock_ml(product))
+            product = await self._ensure_stock_ml(product)
+            normalized.append(self._attach_chips(product, active_chips_by_id))
         return normalized
 
     async def get_by_id(self, product_id: str):
         product = await self.collection.find_one({"_id": ObjectId(product_id)})
-        return await self._ensure_stock_ml(product)
+        product = await self._ensure_stock_ml(product)
+        return await self._attach_chips_single(product)
 
     async def get_by_slug(self, slug: str):
         product = await self.collection.find_one({"slug": slug})
-        return await self._ensure_stock_ml(product)
+        product = await self._ensure_stock_ml(product)
+        return await self._attach_chips_single(product)
 
     async def get_by_id_or_slug(self, identifier: str):
         if ObjectId.is_valid(identifier):
@@ -131,3 +138,71 @@ class ProductService:
                 {"$set": {"stock_ml": computed}},
             )
         return product
+
+    async def _fetch_active_chips_by_id(self) -> dict:
+        """Build a single dict of active chips keyed by their string id.
+
+        Used by get_all() to avoid one chip lookup per product.
+        """
+        active = await self.chip_service.get_active()
+        return {str(chip["_id"]): chip for chip in active}
+
+    def _attach_chips(self, product: Optional[dict], active_chips_by_id: dict) -> Optional[dict]:
+        if not product:
+            return product
+        chip_ids = product.get("chip_ids") or []
+        resolved = []
+        for cid in chip_ids:
+            chip = active_chips_by_id.get(str(cid))
+            if not chip:
+                continue
+            resolved.append({
+                "_id": str(chip["_id"]),
+                "code": chip.get("code"),
+                "label": chip.get("label"),
+                "color": chip.get("color", "indigo"),
+                "icon": chip.get("icon"),
+                "priority": chip.get("priority", 0),
+            })
+        resolved.sort(key=lambda c: (c.get("priority", 0), c.get("label", "")))
+        product["chips"] = resolved
+        return product
+
+    async def _attach_chips_single(self, product: Optional[dict]) -> Optional[dict]:
+        if not product:
+            return product
+        chip_ids = product.get("chip_ids") or []
+        if not chip_ids:
+            product["chips"] = []
+            return product
+        active = await self.chip_service.get_active_by_ids(chip_ids)
+        active_by_id = {str(c["_id"]): c for c in active}
+        return self._attach_chips(product, active_by_id)
+
+    async def bulk_update_chips(self, product_ids: List[str], add: List[str], remove: List[str]):
+        if not product_ids:
+            return {"matched": 0, "modified": 0}
+        object_ids = []
+        for pid in product_ids:
+            try:
+                object_ids.append(ObjectId(pid))
+            except Exception:
+                continue
+
+        modified = 0
+        matched = 0
+        if remove:
+            res = await self.collection.update_many(
+                {"_id": {"$in": object_ids}},
+                {"$pullAll": {"chip_ids": remove}},
+            )
+            matched = max(matched, res.matched_count)
+            modified += res.modified_count
+        if add:
+            res = await self.collection.update_many(
+                {"_id": {"$in": object_ids}},
+                {"$addToSet": {"chip_ids": {"$each": add}}},
+            )
+            matched = max(matched, res.matched_count)
+            modified += res.modified_count
+        return {"matched": matched, "modified": modified}

@@ -1,11 +1,23 @@
 from fastapi import APIRouter, Depends, status, HTTPException
 from typing import List, Optional
-from app.schemas.product import ProductCreate, ProductUpdate, ProductOut
+from app.schemas.product import ProductCreate, ProductUpdate, ProductOut, BulkChipUpdate
 from app.services.product_service import ProductService
 from app.db.mongodb import get_database
 from app.utils.deps import require_admin
 
 router = APIRouter(prefix="/products", tags=["products"])
+
+
+@router.post("/bulk-chips")
+async def bulk_update_chips(
+    body: BulkChipUpdate,
+    db=Depends(get_database),
+    _admin=Depends(require_admin),
+):
+    """Atomically add/remove chip ids across many products in one request."""
+    product_service = ProductService(db)
+    result = await product_service.bulk_update_chips(body.product_ids, body.add, body.remove)
+    return result
 
 @router.get("", response_model=List[ProductOut])
 async def get_products(
