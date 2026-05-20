@@ -1,4 +1,5 @@
 from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo.errors import DuplicateKeyError, OperationFailure
 from app.config.config import settings
 import logging
 
@@ -18,6 +19,33 @@ async def connect_to_mongo():
     except Exception:
         pass
     await db.db["pending_checkouts"].create_index("created_at", expireAfterSeconds=7776000)
+
+    # Guards against duplicate orders when Razorpay redelivers a webhook or
+    # when the client `verify-and-create` path races with the webhook path.
+    # Partial filter so legacy / unpaid orders without a razorpay_order_id
+    # aren't constrained.
+    try:
+        await db.db["orders"].create_index(
+            "payment_details.razorpay_order_id",
+            unique=True,
+            name="uniq_payment_details_razorpay_order_id",
+            partialFilterExpression={
+                "payment_details.razorpay_order_id": {"$exists": True, "$type": "string"}
+            },
+        )
+    except (DuplicateKeyError, OperationFailure) as e:
+        # Most likely cause: pre-existing duplicate orders in the collection.
+        # We log loudly so it can be cleaned up — but we do NOT block startup.
+        print(
+            "\n\033[93m[WARN]\033[0m Could not create unique index on "
+            f"orders.payment_details.razorpay_order_id: {e}\n"
+            "       Run the dedupe script before the index can be enforced."
+        )
+        logging.warning(
+            "Failed to create unique index on orders.payment_details.razorpay_order_id: %s",
+            e,
+        )
+
     print(f"\n\033[92m[SUCCESS]\033[0m Database connected: {settings.DATABASE_NAME}")
     logging.info(f"Connected to MongoDB: {settings.DATABASE_NAME}")
 

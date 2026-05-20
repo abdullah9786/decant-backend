@@ -1,4 +1,5 @@
 from motor.motor_asyncio import AsyncIOMotorDatabase
+from pymongo.errors import DuplicateKeyError
 from app.schemas.order import OrderCreate, OrderUpdate
 from bson import ObjectId
 from typing import List
@@ -80,7 +81,25 @@ class OrderService:
                 order_dict["free_decants"] = []
                 order_dict["free_decants_dropped_reason"] = str(e)
                 free_decants = []
-        result = await self.collection.insert_one(order_dict)
+
+        rzp_oid = (order_dict.get("payment_details") or {}).get("razorpay_order_id")
+        try:
+            result = await self.collection.insert_one(order_dict)
+        except DuplicateKeyError:
+            # Another concurrent writer (e.g. retried webhook or the
+            # verify-and-create / webhook race) already inserted this order.
+            # Return the existing row and skip stock decrement — the winning
+            # writer already handled it. Mark the result so the caller can
+            # also skip re-running side-effects (commission, emails, etc.).
+            if rzp_oid:
+                existing = await self.collection.find_one(
+                    {"payment_details.razorpay_order_id": rzp_oid}
+                )
+                if existing:
+                    existing["_was_duplicate"] = True
+                    return existing
+            raise
+
         await self._decrement_stock(order_dict.get("items", []))
         if free_decants:
             await self._decrement_free_decant_stock(free_decants)

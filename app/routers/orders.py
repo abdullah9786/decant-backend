@@ -420,13 +420,35 @@ async def verify_and_create(
                 order_in.influencer_id = result["influencer_id"]
         except Exception:
             pass
-    
+
+    # 2c. Atomic claim — guarantees only one path (this or the webhook) ever
+    # reaches OrderService.create() for a given razorpay_order_id. Eliminates
+    # the find_one + insert_one race.
+    claimed = await _claim_pending_checkout(db, data.payment_details.razorpay_order_id)
+    if not claimed:
+        # Webhook (or a retry) already grabbed this checkout. Wait a beat for
+        # the winning path to complete, then return whatever it created.
+        # Re-check for an existing order; if not found, the other path is
+        # mid-flight — surface a 409 so the client can show the spinner.
+        existing = await db["orders"].find_one({
+            "payment_details.razorpay_order_id": data.payment_details.razorpay_order_id
+        })
+        if existing:
+            return existing
+        raise HTTPException(
+            status_code=409,
+            detail="Order is being finalized via webhook. Please refresh in a moment.",
+        )
+
     # 3. Create Order (Stock will be checked and decremented here)
     try:
         new_order = await order_service.create(order_in)
 
-        # 4. Side-effects (commission, coupon, email)
-        await _post_order_side_effects(new_order, db)
+        # 4. Side-effects (commission, coupon, email) — only on the winning
+        # writer. A duplicate (concurrent webhook or retry) skips so we don't
+        # double-charge commission or double-email the customer.
+        if not new_order.pop("_was_duplicate", False):
+            await _post_order_side_effects(new_order, db)
 
         await db["pending_checkouts"].update_one(
             {"razorpay_order_id": data.payment_details.razorpay_order_id},
@@ -440,12 +462,14 @@ async def verify_and_create(
         return new_order
     except ValueError as e:
         detail = str(e)
+        refunded = False
         if "Insufficient stock" in detail:
             try:
                 order_service.refund_payment_full(
                     data.payment_details.razorpay_payment_id,
                     data.order_data.total_amount,
                 )
+                refunded = True
                 detail = (
                     "Some items are no longer in stock. Your payment has been refunded "
                     "automatically. Please update your cart and try again."
@@ -457,9 +481,55 @@ async def verify_and_create(
                     "Your payment may still be captured — please contact support with your "
                     f"payment id: {data.payment_details.razorpay_payment_id}"
                 )
+        # Release the claim so a webhook retry doesn't create a phantom order
+        # against a refunded payment.
+        await db["pending_checkouts"].update_one(
+            {"razorpay_order_id": data.payment_details.razorpay_order_id},
+            {"$set": {
+                "status": "refunded" if refunded else "failed",
+                "failed_at": datetime.now(timezone.utc),
+                "failure_reason": detail,
+            }},
+        )
         raise HTTPException(status_code=400, detail=detail)
     except Exception as e:
+        # Unknown failure — release the claim back to pending so webhook/retry
+        # can attempt to recover, instead of stranding the checkout.
+        await db["pending_checkouts"].update_one(
+            {
+                "razorpay_order_id": data.payment_details.razorpay_order_id,
+                "status": "processing",
+            },
+            {"$set": {"status": "pending"}, "$unset": {"claimed_at": ""}},
+        )
         raise HTTPException(status_code=500, detail=f"Order creation failed: {str(e)}")
+
+async def _claim_pending_checkout(db, rzp_order_id: str) -> dict | None:
+    """
+    Atomically transition `pending_checkouts.status` from `pending` → `processing`.
+
+    Returns the (claimed) pending checkout doc on success, or `None` if the
+    checkout is already being processed / has been converted by another path.
+
+    This is the race-killer for `verify-and-create` vs `webhook` (and webhook
+    retries vs itself). Whoever flips the status first proceeds to insert the
+    order; everyone else short-circuits.
+    """
+    # 30-second stuck-claim recovery: if a previous claim crashed mid-flight
+    # without releasing, another writer (e.g. a webhook retry) may legitimately
+    # take it over.
+    stale_cutoff = datetime.now(timezone.utc) - timedelta(seconds=30)
+    return await db["pending_checkouts"].find_one_and_update(
+        {
+            "razorpay_order_id": rzp_order_id,
+            "$or": [
+                {"status": "pending"},
+                {"status": "processing", "claimed_at": {"$lt": stale_cutoff}},
+            ],
+        },
+        {"$set": {"status": "processing", "claimed_at": datetime.now(timezone.utc)}},
+    )
+
 
 async def _post_order_side_effects(new_order: dict, db) -> None:
     """Commission, coupon usage, emails — shared by verify-and-create + webhook."""
@@ -498,6 +568,9 @@ async def _post_order_side_effects(new_order: dict, db) -> None:
 async def razorpay_webhook(request: Request, db=Depends(get_database)):
     body = await request.body()
     signature = request.headers.get("X-Razorpay-Signature", "")
+    # Loud log so it's obvious when Razorpay is actually reaching this endpoint
+    # (e.g. via a tunnel during local development).
+    print(f"\n\033[96m[WEBHOOK]\033[0m razorpay webhook hit (body={len(body)} bytes, has_sig={bool(signature)})")
 
     if settings.RAZORPAY_WEBHOOK_SECRET:
         expected = hmac.new(
@@ -532,9 +605,21 @@ async def razorpay_webhook(request: Request, db=Depends(get_database)):
     if existing:
         return {"ok": True, "already_created": str(existing["_id"])}
 
-    pending = await db["pending_checkouts"].find_one({"razorpay_order_id": rzp_order_id})
-    if not pending or not pending.get("order_data"):
-        print(f"[WEBHOOK] No pending checkout for rzp order {rzp_order_id}")
+    # Atomic claim — only one writer ever reaches OrderService.create() for a
+    # given razorpay_order_id. If this returns None, either verify-and-create
+    # is mid-flight (we let it win) or the checkout is already converted.
+    pending = await _claim_pending_checkout(db, rzp_order_id)
+    if not pending:
+        print(f"[WEBHOOK] Could not claim pending checkout for rzp order {rzp_order_id} (already processing/converted)")
+        existing = await db["orders"].find_one({
+            "payment_details.razorpay_order_id": rzp_order_id,
+        })
+        if existing:
+            return {"ok": True, "already_created": str(existing["_id"])}
+        return {"ok": True, "skipped": "claim_failed"}
+
+    if not pending.get("order_data"):
+        print(f"[WEBHOOK] Claimed pending checkout has no order_data for rzp order {rzp_order_id}")
         return {"ok": True, "skipped": "no_pending_checkout"}
 
     od = pending["order_data"]
@@ -565,7 +650,9 @@ async def razorpay_webhook(request: Request, db=Depends(get_database)):
         print(f"[WEBHOOK] Order creation failed for rzp order {rzp_order_id}: {e}")
         return {"ok": False, "error": str(e)}
 
-    await _post_order_side_effects(new_order, db)
+    was_duplicate = new_order.pop("_was_duplicate", False)
+    if not was_duplicate:
+        await _post_order_side_effects(new_order, db)
 
     await db["pending_checkouts"].update_one(
         {"razorpay_order_id": rzp_order_id},
@@ -576,11 +663,9 @@ async def razorpay_webhook(request: Request, db=Depends(get_database)):
         }},
     )
 
+    if was_duplicate:
+        print(f"[WEBHOOK] Duplicate insert blocked by unique index for rzp order {rzp_order_id}; returning existing order {new_order['_id']}")
+        return {"ok": True, "already_created": str(new_order["_id"])}
+
     print(f"[WEBHOOK] Order {new_order['_id']} created for rzp order {rzp_order_id}")
     return {"ok": True, "order_id": str(new_order["_id"])}
-
-
-@router.post("/verify-payment")
-async def verify_payment(data: PaymentVerifyRequest, db=Depends(get_database)):
-    order_service = OrderService(db)
-    # Legacy endpoint — kept for backward compat

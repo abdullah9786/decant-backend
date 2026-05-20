@@ -205,14 +205,20 @@ class CommissionService:
         return result.modified_count
 
     async def bulk_cancel_by_ids(self, commission_ids: list[str], reason: str | None = None) -> int:
-        """Cancel specific commissions by ID. Returns count cancelled."""
+        """Cancel specific commissions by ID. Zeros amounts and preserves
+        original_order_total, matching the single cancel_commission behavior."""
         oids = [ObjectId(cid) for cid in commission_ids]
-        update: dict = {"status": "cancelled"}
+        set_fields: dict = {
+            "status": "cancelled",
+            "original_order_total": {"$ifNull": ["$original_order_total", "$order_total"]},
+            "order_total": 0,
+            "commission_amount": 0,
+        }
         if reason:
-            update["cancellation_reason"] = reason
+            set_fields["cancellation_reason"] = reason
         result = await self.commissions.update_many(
             {"_id": {"$in": oids}, "status": {"$in": ["pending", "approved"]}},
-            {"$set": update},
+            [{"$set": set_fields}],
         )
         return result.modified_count
 
