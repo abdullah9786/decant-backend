@@ -77,23 +77,54 @@ class MailService:
 
     async def send_order_confirmation(self, email: str, customer_name: str, order: Dict[str, Any]):
         full_id = str(order.get('_id', ''))
-        subject = f"Order Confirmed — DECUME"
         track_url = f"{settings.APP_BASE_URL}/track-order?orderId={full_id}"
         items_html = ""
         for item in order.get('items', []):
             items_html += f"<tr><td>{item['name']} ({item['size_ml']}ml)</td><td style='text-align: right;'>x{item['quantity']}</td><td style='text-align: right;'>₹{item['price'] * item['quantity']}</td></tr>"
 
+        is_cod = order.get("payment_method") == "cod"
+        cod_fee = float(order.get("cod_fee") or 0)
+        total_amount = order.get("total_amount", 0)
+
+        if is_cod:
+            subject = "Order Confirmed (Cash on Delivery) — DECUME"
+            intro = (
+                "Thank you for your order. We've reserved your decants and our "
+                "courier partner will collect the amount below at delivery."
+            )
+            payment_block = f"""
+            <div style="margin: 20px 0; padding: 15px; background: #fffbeb; border: 1px solid #fde68a; border-radius: 5px;">
+                <p style="margin: 0; font-size: 11px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.1em; color: #92400e;">Payment Method</p>
+                <p style="margin: 4px 0 8px; font-size: 14px; font-weight: bold; color: #78350f;">Cash on Delivery</p>
+                <p style="margin: 0; font-size: 12px; color: #92400e;">Please keep <strong>₹{total_amount}</strong> ready at delivery. A ₹{int(cod_fee)} handling fee is included in this amount.</p>
+            </div>
+            """
+            fee_row = (
+                f"<tr><td colspan=\"2\" style=\"padding: 4px 10px; text-align: right; font-size: 12px; color: #6b7280;\">COD handling fee</td>"
+                f"<td style=\"padding: 4px 10px; text-align: right; font-size: 12px; color: #6b7280;\">₹{int(cod_fee)}</td></tr>"
+                if cod_fee > 0 else ""
+            )
+            grand_total_label = "Collect on Delivery"
+        else:
+            subject = "Order Confirmed — DECUME"
+            intro = "Thank you for your order. We've received your payment and are preparing your decants."
+            payment_block = ""
+            fee_row = ""
+            grand_total_label = "Grand Total"
+
         html_body = f"""
         <div style="font-family: serif; color: #022c22; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #f0fdf4;">
             <h2 style="text-transform: uppercase; letter-spacing: 0.2em; border-bottom: 2px solid #059669; padding-bottom: 10px;">Order Confirmed</h2>
             <p>Hi {customer_name},</p>
-            <p>Thank you for your order. We've received your payment and are preparing your decants.</p>
+            <p>{intro}</p>
 
             <div style="margin: 20px 0; padding: 15px; background: #f9fafb; border-radius: 5px;">
                 <p style="margin: 0; font-size: 11px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.1em; color: #6b7280;">Order ID</p>
                 <p style="margin: 4px 0 0; font-size: 14px; font-weight: bold; color: #022c22; word-break: break-all;">{full_id}</p>
             </div>
-            
+
+            {payment_block}
+
             <table style="width: 100%; margin-top: 20px; border-collapse: collapse;">
                 <thead style="background-color: #f9fafb; font-size: 12px; text-transform: uppercase; letter-spacing: 0.1em;">
                     <tr><th style="text-align: left; padding: 10px;">Item</th><th style="padding: 10px; text-align: right;">Qty</th><th style="padding: 10px; text-align: right;">Total</th></tr>
@@ -102,7 +133,8 @@ class MailService:
                     {items_html}
                 </tbody>
                 <tfoot>
-                    <tr><td colspan="2" style="padding: 20px 10px 10px; font-weight: bold; text-align: right;">Grand Total:</td><td style="padding: 20px 10px 10px; font-weight: bold; text-align: right; color: #059669;">₹{order['total_amount']}</td></tr>
+                    {fee_row}
+                    <tr><td colspan="2" style="padding: 20px 10px 10px; font-weight: bold; text-align: right;">{grand_total_label}:</td><td style="padding: 20px 10px 10px; font-weight: bold; text-align: right; color: #059669;">₹{total_amount}</td></tr>
                 </tfoot>
             </table>
 
@@ -143,6 +175,17 @@ class MailService:
         full_id = str(order.get("_id", ""))
         subject = f"Order Cancelled — DECUME"
         name = customer_name or "there"
+        # COD orders cancelled before delivery never collected money, so the
+        # "refund initiated" line would be misleading.
+        is_cod_unpaid = (
+            order.get("payment_method") == "cod"
+            and order.get("payment_status") != "paid"
+        )
+        refund_line = (
+            ""
+            if is_cod_unpaid
+            else "<p>If your payment was already captured, a full refund has been initiated and should reflect in your account within 5–7 business days.</p>"
+        )
         html_body = f"""
         <div style="font-family: serif; color: #022c22; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #f0fdf4;">
             <h2 style="text-transform: uppercase; letter-spacing: 0.2em; border-bottom: 2px solid #dc2626; padding-bottom: 10px;">Order Cancelled</h2>
@@ -152,7 +195,7 @@ class MailService:
                 <p style="margin: 4px 0 0; font-size: 14px; font-weight: bold; color: #022c22; word-break: break-all;">{full_id}</p>
             </div>
             <p>Your order for <strong>₹{order.get('total_amount', 0)}</strong> has been cancelled as requested.</p>
-            <p>If your payment was already captured, a full refund has been initiated and should reflect in your account within 5–7 business days.</p>
+            {refund_line}
             <p style="font-size: 12px; color: #6b7280; margin-top: 30px;">If you did not request this cancellation, please contact our support team immediately.</p>
         </div>
         """
@@ -162,12 +205,23 @@ class MailService:
         # This one is for the admin email
         admin_email = os.getenv("ADMIN_EMAIL", "abdullahansari9768@gmail.com")
         print("admin_email", admin_email, self.from_email)
-        subject = f"NEW ORDER ALERT: ₹{order['total_amount']}"
+        is_cod = order.get("payment_method") == "cod"
+        subject = (
+            f"NEW COD ORDER: ₹{order['total_amount']} — collect on delivery"
+            if is_cod
+            else f"NEW ORDER ALERT: ₹{order['total_amount']}"
+        )
+        method_badge = (
+            "<span style=\"display: inline-block; background: #fde68a; color: #78350f; padding: 4px 10px; font-size: 11px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.1em; border-radius: 3px;\">Cash on Delivery</span>"
+            if is_cod
+            else "<span style=\"display: inline-block; background: #dbeafe; color: #1e3a8a; padding: 4px 10px; font-size: 11px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.1em; border-radius: 3px;\">Prepaid</span>"
+        )
         html_body = f"""
         <div style="font-family: sans-serif; color: #1e293b; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0;">
             <h2 style="color: #020617;">New Order Received</h2>
+            <p>{method_badge}</p>
             <p><strong>Customer:</strong> {order.get('customer_name')}</p>
-            <p><strong>Amount:</strong> ₹{order['total_amount']}</p>
+            <p><strong>Amount:</strong> ₹{order['total_amount']}{' (collect at delivery)' if is_cod else ''}</p>
             <p><strong>Order ID:</strong> {str(order.get('_id', ''))}</p>
             <div style="margin: 20px 0;">
                 <a href="{settings.APP_BASE_URL.replace('3000', '3001')}/orders" style="background-color: #4f46e5; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; font-weight: bold;">Manage in Admin Panel</a>

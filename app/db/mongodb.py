@@ -46,6 +46,29 @@ async def connect_to_mongo():
             e,
         )
 
+    # Idempotency key for COD (and any future non-Razorpay) order paths so
+    # rapid double-submits return the same order instead of creating a
+    # duplicate. Partial filter so legacy / prepaid orders without the
+    # field are not constrained.
+    try:
+        await db.db["orders"].create_index(
+            "idempotency_key",
+            unique=True,
+            name="uniq_orders_idempotency_key",
+            partialFilterExpression={
+                "idempotency_key": {"$exists": True, "$type": "string"}
+            },
+        )
+    except (DuplicateKeyError, OperationFailure) as e:
+        print(
+            "\n\033[93m[WARN]\033[0m Could not create unique index on "
+            f"orders.idempotency_key: {e}"
+        )
+        logging.warning(
+            "Failed to create unique index on orders.idempotency_key: %s",
+            e,
+        )
+
     print(f"\n\033[92m[SUCCESS]\033[0m Database connected: {settings.DATABASE_NAME}")
     logging.info(f"Connected to MongoDB: {settings.DATABASE_NAME}")
 

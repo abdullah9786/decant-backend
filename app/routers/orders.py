@@ -46,6 +46,11 @@ class VerifyAndCreateRequest(BaseModel):
 class CustomerCancelRequest(BaseModel):
     customer_email: Optional[str] = None
 
+
+class PlaceCodRequest(BaseModel):
+    order_data: OrderCreate
+    idempotency_key: str
+
 @router.post("/", response_model=OrderOut, status_code=status.HTTP_201_CREATED)
 async def create_order(order_in: OrderCreate, db=Depends(get_database), current_user=Depends(get_current_user_optional)):
     order_service = OrderService(db)
@@ -257,11 +262,44 @@ async def update_order(id: str, order_in: OrderUpdate, db=Depends(get_database),
             new_status = updated.get("status", "")
 
             if new_status == "delivered" and old_status != "delivered":
-                comm = await db["commissions"].find_one({
-                    "order_id": order_id_str, "status": "pending"
-                })
-                if comm:
-                    await csvc.approve_commission(str(comm["_id"]))
+                # For COD orders, delivery == cash collected: flip payment
+                # status to paid and stamp the collection time. We also
+                # create + approve the influencer commission in one step
+                # (no `pending` phase for COD, since we don't book commission
+                # until the cash is actually in hand).
+                if updated.get("payment_method") == "cod":
+                    cod_paid_at = datetime.now(timezone.utc)
+                    await db["orders"].update_one(
+                        {"_id": old_order["_id"]},
+                        {"$set": {
+                            "payment_status": "paid",
+                            "payment_details.collected_at": cod_paid_at,
+                        }},
+                    )
+                    updated["payment_status"] = "paid"
+                    payment_details = dict(updated.get("payment_details") or {})
+                    payment_details["collected_at"] = cod_paid_at
+                    updated["payment_details"] = payment_details
+
+                    if updated.get("influencer_id"):
+                        existing_comm = await db["commissions"].find_one({
+                            "order_id": order_id_str,
+                        })
+                        if not existing_comm:
+                            created = await csvc.create_commission(
+                                influencer_id=updated["influencer_id"],
+                                order_id=order_id_str,
+                                order_total=updated.get("total_amount", 0),
+                                buyer_user_id=updated.get("user_id"),
+                            )
+                            if created:
+                                await csvc.approve_commission(str(created["_id"]))
+                else:
+                    comm = await db["commissions"].find_one({
+                        "order_id": order_id_str, "status": "pending"
+                    })
+                    if comm:
+                        await csvc.approve_commission(str(comm["_id"]))
 
             if new_status in ("cancelled", "refunded") and old_status not in ("cancelled", "refunded"):
                 comm = await db["commissions"].find_one({
@@ -504,6 +542,97 @@ async def verify_and_create(
         )
         raise HTTPException(status_code=500, detail=f"Order creation failed: {str(e)}")
 
+@router.post("/place-cod", response_model=OrderOut)
+async def place_cod(
+    data: PlaceCodRequest,
+    db=Depends(get_database),
+    current_user=Depends(get_current_user_optional),
+):
+    """Create a Cash on Delivery order. Bypasses Razorpay entirely: no
+    `pending_checkouts` row, no signature verification, no webhook. Stock
+    is reserved at insert time exactly the same way prepaid orders do it.
+
+    Dedup is enforced by a unique partial index on `orders.idempotency_key`
+    plus an explicit short-circuit lookup for a fast path on retries.
+
+    Commission attribution is *not* created here: COD commissions are
+    created and approved only when the order is marked delivered (see the
+    delivered branch in `update_order`).
+    """
+    if not settings.COD_ENABLED:
+        raise HTTPException(status_code=400, detail="Cash on Delivery is currently unavailable.")
+
+    if not data.idempotency_key or not data.idempotency_key.strip():
+        raise HTTPException(status_code=400, detail="idempotency_key is required for COD orders.")
+
+    idem_key = data.idempotency_key.strip()
+
+    # Fast path: if a previous request already created this order, return it.
+    existing = await db["orders"].find_one({"idempotency_key": idem_key})
+    if existing:
+        return existing
+
+    order_in = data.order_data
+
+    # Server-side eligibility — never trust the client. The fee is added
+    # back onto the total so that a tampered client can't smuggle a higher
+    # ticket size under the cap.
+    cod_fee = float(settings.COD_FEE)
+    if order_in.cod_fee is not None and float(order_in.cod_fee) != cod_fee:
+        raise HTTPException(status_code=400, detail="Invalid COD handling fee.")
+    if float(order_in.total_amount) > float(settings.COD_MAX_AMOUNT):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cash on Delivery is only available for orders up to ₹{int(settings.COD_MAX_AMOUNT):,}.",
+        )
+
+    # Auth handling — same shape as verify-and-create so guest + logged-in
+    # users behave identically across both checkout paths.
+    if current_user and not current_user.get("is_admin", False):
+        order_in.user_id = str(current_user["_id"])
+        order_in.customer_name = order_in.customer_name or current_user.get("full_name")
+        order_in.customer_email = order_in.customer_email or current_user.get("email")
+
+    # Coupon → influencer attribution (mirrors prepaid path).
+    if order_in.coupon_code and not order_in.influencer_id:
+        try:
+            coupon_svc = CouponService(db)
+            result = await coupon_svc.validate_coupon(order_in.coupon_code)
+            if result["valid"] and result["influencer_id"]:
+                order_in.influencer_id = result["influencer_id"]
+        except Exception:
+            pass
+
+    # Force the COD shape regardless of what the client sent.
+    order_in.payment_method = "cod"
+    order_in.payment_status = "cod_pending"
+    order_in.status = "pending"
+    order_in.cod_fee = cod_fee
+    order_in.idempotency_key = idem_key
+    order_in.payment_details = {
+        "method": "cod",
+        "cod_fee": cod_fee,
+        "source": "checkout",
+    }
+
+    order_service = OrderService(db)
+    try:
+        new_order = await order_service.create(order_in)
+    except ValueError as e:
+        # Stock / validation failures from `OrderService._ensure_stock`.
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Order creation failed: {str(e)}")
+
+    # Skip side-effects on the duplicate path; the winning writer already
+    # ran them. (Belt-and-suspenders for the rare case the index races a
+    # concurrent submit past our fast-path lookup.)
+    if not new_order.pop("_was_duplicate", False):
+        await _post_order_side_effects(new_order, db)
+
+    return new_order
+
+
 async def _claim_pending_checkout(db, rzp_order_id: str) -> dict | None:
     """
     Atomically transition `pending_checkouts.status` from `pending` → `processing`.
@@ -532,8 +661,14 @@ async def _claim_pending_checkout(db, rzp_order_id: str) -> dict | None:
 
 
 async def _post_order_side_effects(new_order: dict, db) -> None:
-    """Commission, coupon usage, emails — shared by verify-and-create + webhook."""
-    if new_order.get("influencer_id"):
+    """Commission, coupon usage, emails — shared by verify-and-create + webhook + place-cod.
+
+    COD orders intentionally skip commission creation here: the commission
+    is created (and immediately approved) only when the order is marked
+    `delivered`. This keeps RTO'd / undelivered COD orders out of the
+    influencer earnings dashboard entirely.
+    """
+    if new_order.get("influencer_id") and new_order.get("payment_method") != "cod":
         try:
             csvc = CommissionService(db)
             await csvc.create_commission(

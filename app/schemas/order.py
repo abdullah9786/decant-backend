@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any
+from typing import List, Literal, Optional, Dict, Any
 from datetime import datetime, timezone
 from .user import PyObjectId
 from bson import ObjectId
@@ -67,6 +67,9 @@ class OrderBase(BaseModel):
     discount_amount: Optional[float] = None
     free_decants: Optional[List[FreeDecantItem]] = None
     free_decants_dropped_reason: Optional[str] = None
+    payment_method: Literal["prepaid", "cod"] = "prepaid"
+    cod_fee: Optional[float] = None
+    idempotency_key: Optional[str] = None
 
 class OrderCreate(OrderBase):
     pass
@@ -94,6 +97,8 @@ class OrderTrackOut(BaseModel):
     user_id: Optional[str] = None
     status: str = "pending"
     payment_status: Optional[str] = None
+    payment_method: Optional[str] = "prepaid"
+    cod_fee: Optional[float] = None
     items: List[OrderItem]
     total_amount: float
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

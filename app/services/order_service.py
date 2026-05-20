@@ -83,17 +83,25 @@ class OrderService:
                 free_decants = []
 
         rzp_oid = (order_dict.get("payment_details") or {}).get("razorpay_order_id")
+        idem_key = order_dict.get("idempotency_key")
         try:
             result = await self.collection.insert_one(order_dict)
         except DuplicateKeyError:
-            # Another concurrent writer (e.g. retried webhook or the
-            # verify-and-create / webhook race) already inserted this order.
-            # Return the existing row and skip stock decrement — the winning
-            # writer already handled it. Mark the result so the caller can
-            # also skip re-running side-effects (commission, emails, etc.).
+            # Another concurrent writer (e.g. retried webhook, COD double-submit,
+            # or the verify-and-create / webhook race) already inserted this
+            # order. Return the existing row and skip stock decrement — the
+            # winning writer already handled it. Mark the result so the caller
+            # can also skip re-running side-effects (commission, emails, etc.).
             if rzp_oid:
                 existing = await self.collection.find_one(
                     {"payment_details.razorpay_order_id": rzp_oid}
+                )
+                if existing:
+                    existing["_was_duplicate"] = True
+                    return existing
+            if idem_key:
+                existing = await self.collection.find_one(
+                    {"idempotency_key": idem_key}
                 )
                 if existing:
                     existing["_was_duplicate"] = True

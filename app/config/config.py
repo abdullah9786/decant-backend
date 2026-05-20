@@ -44,6 +44,11 @@ class Settings(BaseSettings):
     # Admin Notifications
     ADMIN_EMAIL: str = os.getenv("ADMIN_EMAIL", "")
 
+    # Cash on Delivery
+    COD_ENABLED: bool = os.getenv("COD_ENABLED", "true").lower() == "true"
+    COD_MAX_AMOUNT: float = float(os.getenv("COD_MAX_AMOUNT", "3000"))
+    COD_FEE: float = float(os.getenv("COD_FEE", "49"))
+
     class Config:
         case_sensitive = True
         env_file = ".env"
