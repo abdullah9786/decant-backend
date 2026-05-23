@@ -1,6 +1,12 @@
-from fastapi import APIRouter, Depends, status, HTTPException
+from fastapi import APIRouter, Depends, status, HTTPException, Query
 from typing import List, Optional
-from app.schemas.product import ProductCreate, ProductUpdate, ProductOut, BulkChipUpdate
+from app.schemas.product import (
+    ProductCreate,
+    ProductUpdate,
+    ProductOut,
+    BulkChipUpdate,
+    ProductSearchResponse,
+)
 from app.services.product_service import ProductService
 from app.services.offer_service import OfferService
 from app.services.pricing_service import apply_daily_deal
@@ -49,6 +55,30 @@ async def get_products(
     product_service = ProductService(db)
     products = await product_service.get_all(fragrance_family, brand, is_featured, is_new_arrival, q, sort_by, include_inactive, category_id)
     return await _annotate_with_deal(db, products)
+
+
+@router.get("/search", response_model=ProductSearchResponse)
+async def search_products(
+    q: str = Query(..., min_length=1, max_length=80),
+    limit: int = Query(12, ge=1, le=24),
+    skip: int = Query(0, ge=0),
+    db=Depends(get_database),
+):
+    """Paginated product search for the navbar autosuggest and /search page.
+
+    Returns daily-deal-annotated products so price chips, sale strikes, and
+    discount pills render correctly in the dropdown as well as on the full
+    search page.
+
+    NOTE: This route is registered BEFORE `/{id_or_slug}` on purpose — FastAPI
+    matches in declaration order, and a path-param route would otherwise
+    capture the literal `/search` segment.
+    """
+    product_service = ProductService(db)
+    result = await product_service.search(q=q, limit=limit, skip=skip)
+    result["items"] = await _annotate_with_deal(db, result["items"])
+    return result
+
 
 @router.get("/{id_or_slug}", response_model=ProductOut)
 async def get_product(id_or_slug: str, db=Depends(get_database)):

@@ -81,3 +81,14 @@ class BulkChipUpdate(BaseModel):
     product_ids: List[str]
     add: List[str] = []
     remove: List[str] = []
+
+
+class ProductSearchResponse(BaseModel):
+    """Paginated product search payload returned by `GET /products/search`.
+
+    `items` holds the current page; `total` is the overall match count so
+    the UI can decide whether to render a "Load more" button via `has_more`.
+    """
+    items: List[ProductOut]
+    total: int
+    has_more: bool

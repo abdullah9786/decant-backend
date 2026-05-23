@@ -60,12 +60,16 @@ class ProductService:
         if is_new_arrival is not None:
             query["is_new_arrival"] = is_new_arrival
         if search:
+            # Escape regex special chars so a query like "L'Eau (Issey)" doesn't
+            # blow up the Mongo regex engine; substring + case-insensitive only.
+            safe = re.escape(search.strip())
             query["$or"] = [
-                {"name": {"$regex": search, "$options": "i"}},
-                {"brand": {"$regex": search, "$options": "i"}},
-                {"notes_top": {"$regex": search, "$options": "i"}},
-                {"notes_middle": {"$regex": search, "$options": "i"}},
-                {"notes_base": {"$regex": search, "$options": "i"}},
+                {"name": {"$regex": safe, "$options": "i"}},
+                {"brand": {"$regex": safe, "$options": "i"}},
+                {"notes_top": {"$regex": safe, "$options": "i"}},
+                {"notes_middle": {"$regex": safe, "$options": "i"}},
+                {"notes_base": {"$regex": safe, "$options": "i"}},
+                {"description": {"$regex": safe, "$options": "i"}},
             ]
         cursor = self.collection.find(query)
         if sort_by == "newest":
@@ -79,6 +83,96 @@ class ProductService:
             product = await self._ensure_stock_ml(product)
             normalized.append(self._attach_chips(product, active_chips_by_id))
         return normalized
+
+    async def search(
+        self,
+        q: str,
+        limit: int = 12,
+        skip: int = 0,
+        include_inactive: bool = False,
+    ):
+        """Paginated text search over the product catalogue.
+
+        Powers both the navbar autosuggest dropdown (small `limit`) and the
+        full /search page (larger `limit` + Load More). Returns the matching
+        items plus a `total` count so the frontend can decide whether to show
+        the Load More button.
+
+        Searchable fields: name, brand, notes_top/middle/base, description.
+        Match is case-insensitive substring with regex special chars escaped
+        — i.e. typing "(rose)" won't blow up the Mongo engine.
+
+        For ranking, we boost name/brand matches above note/description
+        matches by running two passes and concatenating the results. It's a
+        pragmatic relevance hack — sufficient for our catalogue size and
+        cheaper than adding a $text index + scoring pipeline right now.
+        """
+        q_clean = (q or "").strip()
+        if not q_clean:
+            return {"items": [], "total": 0, "has_more": False}
+
+        safe = re.escape(q_clean)
+        active_filter: dict = {}
+        if not include_inactive:
+            active_filter["is_active"] = {"$ne": False}
+
+        # Pass 1: high-signal fields (product name, brand).
+        primary_q = {
+            **active_filter,
+            "$or": [
+                {"name": {"$regex": safe, "$options": "i"}},
+                {"brand": {"$regex": safe, "$options": "i"}},
+            ],
+        }
+        # Pass 2: lower-signal fields (notes, description). We'll exclude
+        # anything already matched by pass 1 to avoid duplicates.
+        secondary_q = {
+            **active_filter,
+            "$or": [
+                {"notes_top": {"$regex": safe, "$options": "i"}},
+                {"notes_middle": {"$regex": safe, "$options": "i"}},
+                {"notes_base": {"$regex": safe, "$options": "i"}},
+                {"description": {"$regex": safe, "$options": "i"}},
+            ],
+        }
+
+        # Total count = union of both passes (Mongo $or naturally dedupes).
+        union_q = {
+            **active_filter,
+            "$or": primary_q["$or"] + secondary_q["$or"],
+        }
+        total = await self.collection.count_documents(union_q)
+
+        primary_ids: List[ObjectId] = []
+        primary_docs: List[dict] = []
+        async for doc in self.collection.find(primary_q).sort(
+            [("sort_order", 1), ("created_at", -1)]
+        ):
+            primary_ids.append(doc["_id"])
+            primary_docs.append(doc)
+
+        secondary_docs: List[dict] = []
+        if len(primary_docs) < skip + limit:
+            secondary_query = {**secondary_q, "_id": {"$nin": primary_ids}}
+            async for doc in self.collection.find(secondary_query).sort(
+                [("sort_order", 1), ("created_at", -1)]
+            ):
+                secondary_docs.append(doc)
+
+        combined = primary_docs + secondary_docs
+        window = combined[skip : skip + limit]
+
+        active_chips_by_id = await self._fetch_active_chips_by_id()
+        normalized = []
+        for product in window:
+            product = await self._ensure_stock_ml(product)
+            normalized.append(self._attach_chips(product, active_chips_by_id))
+
+        return {
+            "items": normalized,
+            "total": total,
+            "has_more": skip + len(window) < total,
+        }
 
     async def get_by_id(self, product_id: str):
         product = await self.collection.find_one({"_id": ObjectId(product_id)})
