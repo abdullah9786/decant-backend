@@ -50,6 +50,46 @@ class OfferService:
     async def get_active_by_type(self, offer_type: str):
         return await self.collection.find_one(self._active_query({"type": offer_type}))
 
+    async def get_active_daily_deal(self):
+        """The single active daily-deal offer (or `None`).
+
+        Conflict prevention at create/update time guarantees there's never
+        more than one active at a time, so a single document lookup is safe.
+        """
+        return await self.get_active_by_type("daily_deal")
+
+    async def is_product_in_active_deal(self, product_id: str) -> bool:
+        deal = await self.get_active_daily_deal()
+        if not deal:
+            return False
+        config = deal.get("config") or {}
+        return str(product_id) in (config.get("product_ids") or [])
+
+    async def get_overlapping_daily_deals(
+        self,
+        starts_at: datetime,
+        ends_at: datetime,
+        exclude_id: Optional[str] = None,
+    ) -> list:
+        """Find daily_deal offers whose window overlaps the given range.
+
+        Used by the admin conflict check so two deals can't both be active on
+        the same day. An open-ended deal (starts_at/ends_at = null) is treated
+        as overlapping with anything.
+        """
+        query: dict = {
+            "type": "daily_deal",
+            "is_active": True,
+            "$and": [
+                {"$or": [{"ends_at": None}, {"ends_at": {"$gt": starts_at}}]},
+                {"$or": [{"starts_at": None}, {"starts_at": {"$lt": ends_at}}]},
+            ],
+        }
+        if exclude_id:
+            query["_id"] = {"$ne": ObjectId(exclude_id)}
+        cursor = self.collection.find(query)
+        return await cursor.to_list(length=100)
+
     async def get_by_id(self, offer_id: str):
         return await self.collection.find_one({"_id": ObjectId(offer_id)})
 

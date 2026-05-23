@@ -355,7 +355,12 @@ async def validate_coupon(
     db=Depends(get_database),
 ):
     csvc = CouponService(db)
-    return await csvc.validate_coupon(data.code)
+    cart_items = (
+        [item.model_dump() for item in (data.cart_items or [])]
+        if data.cart_items
+        else None
+    )
+    return await csvc.validate_coupon(data.code, cart_items=cart_items)
 
 
 @router.post("/admin/coupons", response_model=CouponOut, status_code=status.HTTP_201_CREATED)

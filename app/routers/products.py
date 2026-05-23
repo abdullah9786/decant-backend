@@ -2,10 +2,25 @@ from fastapi import APIRouter, Depends, status, HTTPException
 from typing import List, Optional
 from app.schemas.product import ProductCreate, ProductUpdate, ProductOut, BulkChipUpdate
 from app.services.product_service import ProductService
+from app.services.offer_service import OfferService
+from app.services.pricing_service import apply_daily_deal
 from app.db.mongodb import get_database
 from app.utils.deps import require_admin
 
 router = APIRouter(prefix="/products", tags=["products"])
+
+
+async def _annotate_with_deal(db, products):
+    """Decorate each product's variants with sale_price / discount_percent.
+
+    Fetches the active daily-deal exactly once per request so list endpoints
+    don't fan out to N queries.
+    """
+    offer_service = OfferService(db)
+    deal = await offer_service.get_active_daily_deal()
+    if isinstance(products, list):
+        return [apply_daily_deal(p, deal) for p in products]
+    return apply_daily_deal(products, deal) if products else products
 
 
 @router.post("/bulk-chips")
@@ -32,7 +47,8 @@ async def get_products(
     db=Depends(get_database)
 ):
     product_service = ProductService(db)
-    return await product_service.get_all(fragrance_family, brand, is_featured, is_new_arrival, q, sort_by, include_inactive, category_id)
+    products = await product_service.get_all(fragrance_family, brand, is_featured, is_new_arrival, q, sort_by, include_inactive, category_id)
+    return await _annotate_with_deal(db, products)
 
 @router.get("/{id_or_slug}", response_model=ProductOut)
 async def get_product(id_or_slug: str, db=Depends(get_database)):
@@ -40,7 +56,7 @@ async def get_product(id_or_slug: str, db=Depends(get_database)):
     product = await product_service.get_by_id_or_slug(id_or_slug)
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
-    return product
+    return await _annotate_with_deal(db, product)
 
 @router.post("", response_model=ProductOut, status_code=status.HTTP_201_CREATED)
 async def create_product(product_in: ProductCreate, db=Depends(get_database), _admin=Depends(require_admin)):

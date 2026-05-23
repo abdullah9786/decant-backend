@@ -1,8 +1,17 @@
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import List, Optional
 from datetime import datetime, timezone
 from .user import PyObjectId
 from bson import ObjectId
+
+
+class CartItemRef(BaseModel):
+    """Lightweight cart-line shape passed in for daily-deal validation."""
+
+    product_id: str
+    size_ml: Optional[int] = None
+    quantity: Optional[int] = 1
+    is_pack: Optional[bool] = False
 
 
 class CouponBase(BaseModel):
@@ -35,6 +44,7 @@ class CouponOut(CouponBase):
 
 class CouponApplyRequest(BaseModel):
     code: str
+    cart_items: Optional[List[CartItemRef]] = None
 
 
 class CouponApplyResponse(BaseModel):

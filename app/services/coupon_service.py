@@ -1,3 +1,4 @@
+from typing import Optional, Sequence
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from bson import ObjectId
 from datetime import datetime, timezone
@@ -5,6 +6,7 @@ from datetime import datetime, timezone
 
 class CouponService:
     def __init__(self, db: AsyncIOMotorDatabase):
+        self.db = db
         self.coupons = db["coupons"]
         self.profiles = db["influencer_profiles"]
 
@@ -30,8 +32,18 @@ class CouponService:
         result = await self.coupons.insert_one(doc)
         return await self.coupons.find_one({"_id": result.inserted_id})
 
-    async def validate_coupon(self, code: str) -> dict:
-        """Validate a coupon and return discount info + influencer attribution."""
+    async def validate_coupon(
+        self,
+        code: str,
+        cart_items: Optional[Sequence[dict]] = None,
+    ) -> dict:
+        """Validate a coupon and return discount info + influencer attribution.
+
+        When `cart_items` includes a product that's part of the active daily
+        deal, the coupon is rejected. Stacking the deal discount with a
+        coupon would double-dip on margin and create unclear commission
+        attribution.
+        """
         coupon = await self.coupons.find_one({"code": code.upper().strip()})
 
         if not coupon:
@@ -46,6 +58,24 @@ class CouponService:
         profile = await self.profiles.find_one({"_id": ObjectId(coupon["influencer_id"])})
         if not profile or not profile.get("is_active", True):
             return {"valid": False, "discount_percent": 0, "influencer_id": None, "message": "Influencer is inactive"}
+
+        if cart_items:
+            # Local import to avoid a circular dependency: pricing_service and
+            # offer_service don't reach back into the coupon layer.
+            from app.services.offer_service import OfferService
+
+            deal = await OfferService(self.db).get_active_daily_deal()
+            if deal:
+                deal_pids = {
+                    str(pid) for pid in ((deal.get("config") or {}).get("product_ids") or [])
+                }
+                if any(str(i.get("product_id") or "") in deal_pids for i in cart_items):
+                    return {
+                        "valid": False,
+                        "discount_percent": 0,
+                        "influencer_id": None,
+                        "message": "Today's deal is already applied. Coupons can't be combined.",
+                    }
 
         return {
             "valid": True,

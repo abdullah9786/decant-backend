@@ -20,6 +20,8 @@ from app.services.auth_service import AuthService
 from app.services.mail_service import MailService
 from app.services.commission_service import CommissionService
 from app.services.coupon_service import CouponService
+from app.services.offer_service import OfferService
+from app.services.pricing_service import compute_line_unit_price
 from app.config.config import settings
 
 router = APIRouter(prefix="/orders", tags=["orders"])
@@ -395,6 +397,78 @@ async def initiate_payment_only(body: InitiatePaymentRequest, db=Depends(get_dat
         "free_decants_removed_reason": free_decants_removed_reason,
     }
 
+async def _revalidate_daily_deal_pricing(db, order_in: OrderCreate) -> None:
+    """Reject orders whose line prices disagree with the server-derived
+    price for today's daily deal.
+
+    Tampering vector this closes: a client could pay yesterday's full
+    price for an item that should be 50% off today (or vice versa). Without
+    a server-side recompute, our discount marketing becomes opt-in for the
+    honest user only.
+
+    The check is per-variant: we re-derive what the unit price *should* be
+    given the active deal + variant + pack flag. A small tolerance (₹0.5)
+    absorbs floating-point rounding.
+
+    Coupon-stacking is also blocked here as a belt-and-suspenders against
+    a stale coupon being re-submitted after a deal item was added to cart.
+    """
+    if not order_in.items:
+        return
+
+    offer_service = OfferService(db)
+    deal = await offer_service.get_active_daily_deal()
+
+    deal_pids = {
+        str(pid)
+        for pid in (((deal or {}).get("config") or {}).get("product_ids") or [])
+    }
+
+    has_deal_line = False
+    distinct_pids = {str(i.product_id) for i in order_in.items if i.product_id}
+
+    products_by_id: dict[str, dict] = {}
+    for pid in distinct_pids:
+        if not ObjectId.is_valid(pid):
+            continue
+        prod = await db["products"].find_one({"_id": ObjectId(pid)})
+        if prod:
+            products_by_id[pid] = prod
+
+    for item in order_in.items:
+        if item.gift_box_id:
+            # Gift boxes have their own pricing pipeline; skip here.
+            continue
+        product = products_by_id.get(str(item.product_id))
+        if not product:
+            # Stock check will fail later anyway; don't double-report.
+            continue
+        # Daily-deal price covers the bare variant. Bottle add-ons are
+        # priced separately and not subject to the deal.
+        expected_unit = compute_line_unit_price(
+            product,
+            size_ml=int(item.size_ml),
+            is_pack=bool(item.is_pack),
+            deal=deal,
+        )
+        if expected_unit is None:
+            continue
+        expected_with_bottle = expected_unit + float(item.bottle_price or 0)
+        if abs(float(item.price) - expected_with_bottle) > 0.5:
+            raise HTTPException(
+                status_code=409,
+                detail="Prices have changed — please refresh your cart.",
+            )
+        if str(item.product_id) in deal_pids:
+            has_deal_line = True
+
+    if has_deal_line and order_in.coupon_code:
+        raise HTTPException(
+            status_code=409,
+            detail="Today's deal is already applied. Coupons can't be combined.",
+        )
+
+
 @router.post("/verify-and-create", response_model=OrderOut)
 async def verify_and_create(
     data: VerifyAndCreateRequest, 
@@ -438,7 +512,11 @@ async def verify_and_create(
         order_in.user_id = str(current_user["_id"])
         order_in.customer_name = order_in.customer_name or current_user.get("full_name")
         order_in.customer_email = order_in.customer_email or current_user.get("email")
-    
+
+    # 2a. Daily-deal price validation. We do this BEFORE claiming the
+    # pending checkout so a tampered request doesn't poison the pending row.
+    await _revalidate_daily_deal_pricing(db, order_in)
+
     # Update payment details
     order_in.payment_status = "paid"
     order_in.status = "processing"
@@ -592,6 +670,10 @@ async def place_cod(
         order_in.user_id = str(current_user["_id"])
         order_in.customer_name = order_in.customer_name or current_user.get("full_name")
         order_in.customer_email = order_in.customer_email or current_user.get("email")
+
+    # Daily-deal price validation. Same tamper-prevention guarantee as
+    # verify-and-create — runs before idempotency-key takes effect.
+    await _revalidate_daily_deal_pricing(db, order_in)
 
     # Coupon → influencer attribution (mirrors prepaid path).
     if order_in.coupon_code and not order_in.influencer_id:
