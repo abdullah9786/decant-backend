@@ -41,8 +41,12 @@ class MailService:
             print(f"[MAIL] Request error: {exc}")
             return False
 
+    def _frontend_url(self, path: str) -> str:
+        base = settings.APP_BASE_URL.rstrip("/")
+        return f"{base}{path}"
+
     async def send_verification_email(self, email: str, full_name: str, token: str):
-        verify_link = f"{settings.APP_BASE_URL}/verify-email?token={token}"
+        verify_link = self._frontend_url(f"/verify-email?token={token}")
         subject = "Verify your email for DECUME"
         name = full_name or "there"
         html_body = f"""
@@ -59,7 +63,7 @@ class MailService:
         return await self._send_email(email, full_name, subject, html_body)
 
     async def send_reset_email(self, email: str, full_name: str, token: str):
-        reset_link = f"{settings.APP_BASE_URL}/reset-password?token={token}"
+        reset_link = self._frontend_url(f"/reset-password?token={token}")
         subject = "Reset your DECUME password"
         name = full_name or "there"
         html_body = f"""

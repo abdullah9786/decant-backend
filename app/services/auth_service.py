@@ -18,6 +18,15 @@ class AuthService:
     def _hash_refresh_token(self, plain: str) -> str:
         return hashlib.sha256(plain.encode()).hexdigest()
 
+    @staticmethod
+    def _ensure_utc_aware(dt: datetime | None) -> datetime | None:
+        """MongoDB returns naive UTC datetimes; normalize before comparing."""
+        if dt is None:
+            return None
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+
     async def issue_refresh_token(self, user_id: ObjectId) -> str:
         plain = secrets.token_urlsafe(32)
         token_hash = self._hash_refresh_token(plain)
@@ -37,9 +46,7 @@ class AuthService:
         sess = await self.refresh_sessions.find_one({"token_hash": token_hash})
         if not sess:
             return None
-        exp = sess["expires_at"]
-        if exp.tzinfo is None:
-            exp = exp.replace(tzinfo=timezone.utc)
+        exp = self._ensure_utc_aware(sess["expires_at"])
         if exp < datetime.now(timezone.utc):
             await self.refresh_sessions.delete_one({"_id": sess["_id"]})
             return None
@@ -114,7 +121,7 @@ class AuthService:
         user = await self.collection.find_one({"verification_token": token})
         if not user:
             return False
-        expires = user.get("verification_expires_at")
+        expires = self._ensure_utc_aware(user.get("verification_expires_at"))
         if expires and expires < datetime.now(timezone.utc):
             return False
         await self.collection.update_one(
@@ -154,7 +161,7 @@ class AuthService:
         user = await self.collection.find_one({"reset_token": token})
         if not user:
             return False
-        expires = user.get("reset_expires_at")
+        expires = self._ensure_utc_aware(user.get("reset_expires_at"))
         if expires and expires < datetime.now(timezone.utc):
             return False
         hashed = get_password_hash(new_password)

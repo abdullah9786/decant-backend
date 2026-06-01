@@ -16,3 +16,4 @@ dist/
 build/
 *.egg-info/
 *.egg
+pip.conf
