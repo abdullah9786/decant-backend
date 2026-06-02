@@ -9,6 +9,7 @@ class DecantVariant(BaseModel):
     price: float
     is_pack: bool = False
     stock: int = 0
+    label: Optional[str] = None
     # Daily-deal annotation. Populated on read by `pricing_service.apply_daily_deal`.
     # `sale_price` equals `original_price` when no deal applies to this variant.
     original_price: Optional[float] = None
