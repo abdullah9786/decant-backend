@@ -10,6 +10,7 @@ class CategoryBase(BaseModel):
     description: Optional[str] = None
     image_url: Optional[str] = None
     is_active: bool = True
+    is_featured: bool = False
     sort_order: int = 0
 
 class CategoryCreate(CategoryBase):
@@ -21,6 +22,7 @@ class CategoryUpdate(BaseModel):
     description: Optional[str] = None
     image_url: Optional[str] = None
     is_active: Optional[bool] = None
+    is_featured: Optional[bool] = None
     sort_order: Optional[int] = None
 
 class CategoryOut(CategoryBase):

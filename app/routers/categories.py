@@ -8,9 +8,13 @@ from app.utils.deps import require_admin
 router = APIRouter(prefix="/categories", tags=["categories"])
 
 @router.get("", response_model=List[CategoryOut])
-async def get_categories(include_inactive: bool = False, db=Depends(get_database)):
+async def get_categories(
+    include_inactive: bool = False,
+    featured: bool = False,
+    db=Depends(get_database),
+):
     service = CategoryService(db)
-    return await service.get_all(include_inactive)
+    return await service.get_all(include_inactive, featured_only=featured)
 
 @router.get("/{id}", response_model=CategoryOut)
 async def get_category(id: str, db=Depends(get_database)):

@@ -7,8 +7,12 @@ class CategoryService:
     def __init__(self, db: AsyncIOMotorDatabase):
         self.collection = db["categories"]
 
-    async def get_all(self, include_inactive: bool = False):
-        query = {} if include_inactive else {"is_active": {"$ne": False}}
+    async def get_all(self, include_inactive: bool = False, featured_only: bool = False):
+        query: dict = {}
+        if not include_inactive:
+            query["is_active"] = {"$ne": False}
+        if featured_only:
+            query["is_featured"] = True
         cursor = self.collection.find(query).sort([("sort_order", 1), ("name", 1)])
         return await cursor.to_list(length=200)
 
