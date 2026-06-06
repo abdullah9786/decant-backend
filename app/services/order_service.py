@@ -166,27 +166,50 @@ class OrderService:
                             )
                 except Exception:
                     continue
-            else:
-                product_id = item.get("product_id")
-                size_ml = item.get("size_ml")
-                if not product_id or size_ml is None:
+                continue
+
+            product_id = item.get("product_id")
+            if not product_id:
+                continue
+            try:
+                product = await self.products.find_one({"_id": ObjectId(product_id)})
+            except Exception:
+                product = None
+
+            if product and product.get("product_type") == "set":
+                set_size = int(item.get("size_ml") or 0)
+                if set_size <= 0:
                     continue
-                try:
-                    if item.get("is_pack"):
-                        await self.products.update_one(
-                            {"_id": ObjectId(product_id),
-                             "variants.size_ml": int(size_ml),
-                             "variants.is_pack": True},
-                            {"$inc": {"variants.$.stock": quantity}},
-                        )
-                    else:
-                        total_ml = int(size_ml) * quantity
-                        await self.products.update_one(
-                            {"_id": ObjectId(product_id)},
-                            {"$inc": {"stock_ml": total_ml}},
-                        )
-                except Exception:
-                    continue
+                components = item.get("set_items") or product.get("set_items") or []
+                for si in components:
+                    comp_id = si.get("product_id")
+                    if not comp_id:
+                        continue
+                    await self.products.update_one(
+                        {"_id": ObjectId(comp_id)},
+                        {"$inc": {"stock_ml": set_size * quantity}},
+                    )
+                continue
+
+            size_ml = item.get("size_ml")
+            if size_ml is None:
+                continue
+            try:
+                if item.get("is_pack"):
+                    await self.products.update_one(
+                        {"_id": ObjectId(product_id),
+                         "variants.size_ml": int(size_ml),
+                         "variants.is_pack": True},
+                        {"$inc": {"variants.$.stock": quantity}},
+                    )
+                else:
+                    total_ml = int(size_ml) * quantity
+                    await self.products.update_one(
+                        {"_id": ObjectId(product_id)},
+                        {"$inc": {"stock_ml": total_ml}},
+                    )
+            except Exception:
+                continue
 
     async def _decrement_stock(self, items: List[dict]):
         for item in items:
@@ -210,28 +233,55 @@ class OrderService:
                             )
                 except Exception:
                     continue
-            else:
-                product_id = item.get("product_id")
-                size_ml = item.get("size_ml")
-                if not product_id or size_ml is None:
+                continue
+
+            product_id = item.get("product_id")
+            if not product_id:
+                continue
+            try:
+                product = await self.products.find_one({"_id": ObjectId(product_id)})
+            except Exception:
+                product = None
+
+            if product and product.get("product_type") == "set":
+                set_size = int(item.get("size_ml") or 0)
+                if set_size <= 0:
                     continue
-                try:
-                    if item.get("is_pack"):
-                        await self.products.update_one(
-                            {"_id": ObjectId(product_id),
-                             "variants.size_ml": int(size_ml),
-                             "variants.is_pack": True,
-                             "variants.stock": {"$gte": quantity}},
-                            {"$inc": {"variants.$.stock": -quantity}},
-                        )
-                    else:
-                        total_ml = int(size_ml) * quantity
-                        await self.products.update_one(
-                            {"_id": ObjectId(product_id), "stock_ml": {"$gte": total_ml}},
-                            {"$inc": {"stock_ml": -total_ml}},
-                        )
-                except Exception:
-                    continue
+                components = item.get("set_items") or product.get("set_items") or []
+                for si in components:
+                    comp_id = si.get("product_id")
+                    if not comp_id:
+                        continue
+                    total_ml = set_size * quantity
+                    await self.products.update_one(
+                        {
+                            "_id": ObjectId(comp_id),
+                            "stock_ml": {"$gte": total_ml},
+                        },
+                        {"$inc": {"stock_ml": -total_ml}},
+                    )
+                continue
+
+            size_ml = item.get("size_ml")
+            if size_ml is None:
+                continue
+            try:
+                if item.get("is_pack"):
+                    await self.products.update_one(
+                        {"_id": ObjectId(product_id),
+                         "variants.size_ml": int(size_ml),
+                         "variants.is_pack": True,
+                         "variants.stock": {"$gte": quantity}},
+                        {"$inc": {"variants.$.stock": -quantity}},
+                    )
+                else:
+                    total_ml = int(size_ml) * quantity
+                    await self.products.update_one(
+                        {"_id": ObjectId(product_id), "stock_ml": {"$gte": total_ml}},
+                        {"$inc": {"stock_ml": -total_ml}},
+                    )
+            except Exception:
+                continue
 
     async def _ensure_stock(self, items: List[dict]):
         for item in items:
@@ -259,12 +309,35 @@ class OrderService:
                 continue
 
             product_id = item.get("product_id")
-            size_ml = item.get("size_ml")
-            if not product_id or size_ml is None:
+            if not product_id:
                 continue
             product = await self.products.find_one({"_id": ObjectId(product_id)})
             if not product:
                 raise ValueError("Insufficient stock for one or more items.")
+
+            if product.get("product_type") == "set":
+                set_size = int(item.get("size_ml") or 0)
+                if set_size <= 0:
+                    raise ValueError("This set is not configured correctly.")
+                components = item.get("set_items") or product.get("set_items") or []
+                if not components:
+                    raise ValueError("This set is not configured correctly.")
+                for si in components:
+                    comp_id = si.get("product_id")
+                    if not comp_id:
+                        raise ValueError("This set is not configured correctly.")
+                    comp = await self.products.find_one({"_id": ObjectId(comp_id)})
+                    if not comp:
+                        raise ValueError("Insufficient stock for one or more items.")
+                    total_ml = set_size * quantity
+                    available = int(comp.get("stock_ml", 0))
+                    if available < total_ml:
+                        raise ValueError("Insufficient stock for one or more items in this set.")
+                continue
+
+            size_ml = item.get("size_ml")
+            if size_ml is None:
+                continue
 
             if item.get("is_pack"):
                 variant = next(
@@ -315,6 +388,8 @@ class OrderService:
         qualifying_count = 0
         for it in items:
             if it.get("gift_box_id"):
+                continue
+            if it.get("product_type") == "set":
                 continue
             item_is_pack = bool(it.get("is_pack"))
             if qualifying_type == "decant" and item_is_pack:

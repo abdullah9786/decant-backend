@@ -1,8 +1,19 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any
+from typing import List, Literal, Optional, Dict, Any
 from datetime import datetime, timezone
 from .user import PyObjectId
 from bson import ObjectId
+
+
+class SetItem(BaseModel):
+    product_id: str
+    # Display-only fields populated on read; not stored on write.
+    name: Optional[str] = None
+    brand: Optional[str] = None
+    image_url: Optional[str] = None
+    slug: Optional[str] = None
+    stock_ml: Optional[int] = None
+
 
 class DecantVariant(BaseModel):
     size_ml: int
@@ -22,7 +33,10 @@ class ProductBase(BaseModel):
     brand: str
     slug: Optional[str] = None
     description: str
-    fragrance_family: str
+    product_type: Literal["single", "set"] = "single"
+    set_items: List[SetItem] = []
+    theme_label: Optional[str] = None
+    fragrance_family: str = ""
     image_url: Optional[str] = None
     images: List[str] = []
     variants: List[DecantVariant]
@@ -49,6 +63,9 @@ class ProductUpdate(BaseModel):
     brand: Optional[str] = None
     slug: Optional[str] = None
     description: Optional[str] = None
+    product_type: Optional[Literal["single", "set"]] = None
+    set_items: Optional[List[SetItem]] = None
+    theme_label: Optional[str] = None
     fragrance_family: Optional[str] = None
     image_url: Optional[str] = None
     images: Optional[List[str]] = None

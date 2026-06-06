@@ -439,6 +439,8 @@ async def _revalidate_daily_deal_pricing(db, order_in: OrderCreate) -> None:
         if item.gift_box_id:
             # Gift boxes have their own pricing pipeline; skip here.
             continue
+        if item.product_type == "set":
+            continue
         product = products_by_id.get(str(item.product_id))
         if not product:
             # Stock check will fail later anyway; don't double-report.

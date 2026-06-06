@@ -45,6 +45,7 @@ class ProductService:
         sort_by: Optional[str] = None,
         include_inactive: bool = False,
         category_id: Optional[str] = None,
+        product_type: Optional[str] = None,
     ):
         query: dict = {}
         if not include_inactive:
@@ -59,6 +60,8 @@ class ProductService:
             query["is_featured"] = is_featured
         if is_new_arrival is not None:
             query["is_new_arrival"] = is_new_arrival
+        if product_type:
+            query["product_type"] = product_type
         if search:
             # Escape regex special chars so a query like "L'Eau (Issey)" doesn't
             # blow up the Mongo regex engine; substring + case-insensitive only.
@@ -81,6 +84,7 @@ class ProductService:
         normalized = []
         for product in products:
             product = await self._ensure_stock_ml(product)
+            product = await self._enrich_set_items(product)
             normalized.append(self._attach_chips(product, active_chips_by_id))
         return normalized
 
@@ -166,6 +170,7 @@ class ProductService:
         normalized = []
         for product in window:
             product = await self._ensure_stock_ml(product)
+            product = await self._enrich_set_items(product)
             normalized.append(self._attach_chips(product, active_chips_by_id))
 
         return {
@@ -177,11 +182,13 @@ class ProductService:
     async def get_by_id(self, product_id: str):
         product = await self.collection.find_one({"_id": ObjectId(product_id)})
         product = await self._ensure_stock_ml(product)
+        product = await self._enrich_set_items(product)
         return await self._attach_chips_single(product)
 
     async def get_by_slug(self, slug: str):
         product = await self.collection.find_one({"slug": slug})
         product = await self._ensure_stock_ml(product)
+        product = await self._enrich_set_items(product)
         return await self._attach_chips_single(product)
 
     async def get_by_id_or_slug(self, identifier: str):
@@ -193,19 +200,35 @@ class ProductService:
 
     async def create(self, product_in: ProductCreate):
         product_dict = product_in.dict()
+        await self._validate_product(product_dict)
         product_dict["created_at"] = product_dict.get("created_at") or datetime.now(timezone.utc)
-        base_slug = _slugify(f"{product_dict['name']} {product_dict['brand']}")
+        if product_dict.get("product_type") == "set":
+            product_dict["stock_ml"] = 0
+            if not (product_dict.get("brand") or "").strip():
+                product_dict["brand"] = "Curated"
+            base_slug = _slugify(product_dict["name"])
+        else:
+            base_slug = _slugify(f"{product_dict['name']} {product_dict['brand']}")
         product_dict["slug"] = await self._unique_slug(base_slug)
         product_result = await self.collection.insert_one(product_dict)
         return await self.get_by_id(str(product_result.inserted_id))
 
     async def update(self, product_id: str, product_in: ProductUpdate):
         update_data = {k: v for k, v in product_in.dict(exclude_unset=True).items()}
-        if "name" in update_data or "brand" in update_data:
-            current = await self.collection.find_one({"_id": ObjectId(product_id)}, {"name": 1, "brand": 1})
+        current = await self.collection.find_one({"_id": ObjectId(product_id)})
+        if not current:
+            return None
+        merged = {**current, **update_data}
+        await self._validate_product(merged, exclude_id=product_id)
+        if merged.get("product_type") == "set":
+            update_data["stock_ml"] = 0
+            if not (merged.get("brand") or "").strip():
+                update_data["brand"] = "Curated"
+        if "name" in update_data or "brand" in update_data or "product_type" in update_data:
             name = update_data.get("name", current.get("name", ""))
             brand = update_data.get("brand", current.get("brand", ""))
-            base_slug = _slugify(f"{name} {brand}")
+            is_set = merged.get("product_type") == "set"
+            base_slug = _slugify(name) if is_set else _slugify(f"{name} {brand}")
             update_data["slug"] = await self._unique_slug(base_slug, exclude_id=product_id)
         await self.collection.update_one(
             {"_id": ObjectId(product_id)}, {"$set": update_data}
@@ -217,6 +240,8 @@ class ProductService:
 
     async def _ensure_stock_ml(self, product: Optional[dict]):
         if not product:
+            return product
+        if product.get("product_type") == "set":
             return product
         if product.get("stock_ml") is None:
             variants = product.get("variants", [])
@@ -300,3 +325,70 @@ class ProductService:
             matched = max(matched, res.matched_count)
             modified += res.modified_count
         return {"matched": matched, "modified": modified}
+
+    async def _validate_product(self, product_dict: dict, exclude_id: Optional[str] = None):
+        product_type = product_dict.get("product_type") or "single"
+        if product_type != "set":
+            return
+
+        set_items = product_dict.get("set_items") or []
+        if len(set_items) < 2:
+            raise ValueError("A set must include at least 2 fragrances.")
+
+        normalized_items = []
+        for item in set_items:
+            pid = str(item.get("product_id") or "")
+            if not ObjectId.is_valid(pid):
+                raise ValueError(f"Invalid product in set: {pid or 'unknown'}")
+            if exclude_id and pid == exclude_id:
+                raise ValueError("A set cannot include itself.")
+            comp = await self.collection.find_one({"_id": ObjectId(pid)})
+            if not comp:
+                raise ValueError("One or more set fragrances were not found.")
+            if comp.get("product_type") == "set":
+                raise ValueError("Set items must be single fragrances, not other sets.")
+            normalized_items.append({"product_id": pid})
+
+        product_dict["set_items"] = normalized_items
+
+        variants = product_dict.get("variants") or []
+        decant_variants = [
+            v for v in variants
+            if not v.get("is_pack") and int(v.get("size_ml") or 0) > 0 and float(v.get("price") or 0) > 0
+        ]
+        if len(decant_variants) == 0:
+            raise ValueError("Please add at least one set size with a price.")
+
+        for variant in decant_variants:
+            size_ml = int(variant.get("size_ml") or 0)
+            for item in normalized_items:
+                comp = await self.collection.find_one({"_id": ObjectId(item["product_id"])})
+                has_decant_variant = any(
+                    int(v.get("size_ml", 0)) == size_ml and not v.get("is_pack")
+                    for v in (comp or {}).get("variants", [])
+                )
+                if not has_decant_variant:
+                    raise ValueError(
+                        f"{comp.get('name', 'Product')} does not offer a {size_ml}ml decant required for this set size."
+                    )
+
+    async def _enrich_set_items(self, product: Optional[dict]):
+        if not product or product.get("product_type") != "set":
+            return product
+
+        enriched = []
+        for item in product.get("set_items") or []:
+            pid = str(item.get("product_id") or "")
+            comp = None
+            if ObjectId.is_valid(pid):
+                comp = await self.collection.find_one({"_id": ObjectId(pid)})
+            enriched.append({
+                "product_id": pid,
+                "name": comp.get("name") if comp else item.get("name", ""),
+                "brand": comp.get("brand") if comp else item.get("brand", ""),
+                "image_url": comp.get("image_url") if comp else item.get("image_url"),
+                "slug": comp.get("slug") if comp else item.get("slug"),
+                "stock_ml": int(comp.get("stock_ml", 0)) if comp else 0,
+            })
+        product["set_items"] = enriched
+        return product

@@ -50,10 +50,21 @@ async def get_products(
     sort_by: Optional[str] = None,
     include_inactive: bool = False,
     category_id: Optional[str] = None,
+    product_type: Optional[str] = None,
     db=Depends(get_database)
 ):
     product_service = ProductService(db)
-    products = await product_service.get_all(fragrance_family, brand, is_featured, is_new_arrival, q, sort_by, include_inactive, category_id)
+    products = await product_service.get_all(
+        fragrance_family,
+        brand,
+        is_featured,
+        is_new_arrival,
+        q,
+        sort_by,
+        include_inactive,
+        category_id,
+        product_type,
+    )
     return await _annotate_with_deal(db, products)
 
 
@@ -91,12 +102,21 @@ async def get_product(id_or_slug: str, db=Depends(get_database)):
 @router.post("", response_model=ProductOut, status_code=status.HTTP_201_CREATED)
 async def create_product(product_in: ProductCreate, db=Depends(get_database), _admin=Depends(require_admin)):
     product_service = ProductService(db)
-    return await product_service.create(product_in)
+    try:
+        return await product_service.create(product_in)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 @router.put("/{id}", response_model=ProductOut)
 async def update_product(id: str, product_in: ProductUpdate, db=Depends(get_database), _admin=Depends(require_admin)):
     product_service = ProductService(db)
-    return await product_service.update(id, product_in)
+    try:
+        updated = await product_service.update(id, product_in)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if not updated:
+        raise HTTPException(status_code=404, detail="Product not found")
+    return updated
 
 @router.delete("/{id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_product(id: str, db=Depends(get_database), _admin=Depends(require_admin)):

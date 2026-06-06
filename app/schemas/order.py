@@ -11,6 +11,13 @@ class GiftBoxSelectedProduct(BaseModel):
     price: float = 0
 
 
+class SetItemSnapshot(BaseModel):
+    product_id: str
+    name: str = ""
+    brand: str = ""
+    size_ml: int = 0
+
+
 class OrderItem(BaseModel):
     product_id: str
     name: str
@@ -19,6 +26,8 @@ class OrderItem(BaseModel):
     quantity: int
     status: str = "pending"
     is_pack: bool = False
+    product_type: str = "single"
+    set_items: Optional[List[SetItemSnapshot]] = None
     gift_box_id: Optional[str] = None
     selected_products: Optional[List[GiftBoxSelectedProduct]] = None
     bottle_id: Optional[str] = None
@@ -40,6 +49,8 @@ class InitiatePaymentItem(BaseModel):
     size_ml: int
     quantity: int
     is_pack: bool = False
+    product_type: str = "single"
+    set_items: Optional[List[SetItemSnapshot]] = None
     gift_box_id: Optional[str] = None
     selected_products: Optional[List[GiftBoxSelectedProduct]] = None
     bottle_id: Optional[str] = None
