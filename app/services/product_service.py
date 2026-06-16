@@ -311,7 +311,7 @@ class ProductService:
         product = await self._enrich_set_items(product)
         return self._attach_chips(product, active_chips_by_id)
 
-    async def get_related(self, identifier: str, limit: int = 4) -> Optional[List[dict]]:
+    async def get_related(self, identifier: str, limit: int = 10) -> Optional[List[dict]]:
         source = await self.get_by_id_or_slug(identifier)
         if not source:
             return None

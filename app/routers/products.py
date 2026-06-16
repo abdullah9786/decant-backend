@@ -94,7 +94,7 @@ async def search_products(
 @router.get("/{id_or_slug}/related", response_model=List[ProductOut])
 async def get_related_products(
     id_or_slug: str,
-    limit: int = Query(4, ge=1, le=12),
+    limit: int = Query(10, ge=1, le=24),
     db=Depends(get_database),
 ):
     product_service = ProductService(db)
