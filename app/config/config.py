@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     # Admin Notifications
     ADMIN_EMAIL: str = os.getenv("ADMIN_EMAIL", "")
 
+    # Next.js on-demand ISR revalidation (storefront)
+    FRONTEND_URL: str = os.getenv("FRONTEND_URL", "http://localhost:3000")
+    REVALIDATE_SECRET: str = os.getenv("REVALIDATE_SECRET", "")
+
     # Cash on Delivery
     COD_ENABLED: bool = os.getenv("COD_ENABLED", "true").lower() == "true"
     COD_MAX_AMOUNT: float = float(os.getenv("COD_MAX_AMOUNT", "3000"))

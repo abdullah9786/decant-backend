@@ -1,20 +1,6 @@
 from motor.motor_asyncio import AsyncIOMotorDatabase
-from app.schemas.review import ReviewCreate
 from bson import ObjectId
 from typing import List
-
-class ReviewService:
-    def __init__(self, db: AsyncIOMotorDatabase):
-        self.collection = db["reviews"]
-
-    async def create(self, review_in: ReviewCreate):
-        review_dict = review_in.dict()
-        result = await self.collection.insert_one(review_dict)
-        return await self.collection.find_one({"_id": result.inserted_id})
-
-    async def get_by_product(self, product_id: str):
-        cursor = self.collection.find({"product_id": product_id})
-        return await cursor.to_list(length=100)
 
 class UserService:
     def __init__(self, db: AsyncIOMotorDatabase):

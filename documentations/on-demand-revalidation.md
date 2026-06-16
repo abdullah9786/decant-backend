@@ -30,7 +30,7 @@ FRONTEND_URL=https://decume.in
 Create `frontend-user/src/app/api/revalidate/route.ts`:
 
 ```typescript
-import { revalidatePath } from 'next/cache';
+import { revalidatePath, revalidateTag } from 'next/cache';
 import { NextRequest, NextResponse } from 'next/server';
 
 export async function POST(request: NextRequest) {
@@ -39,13 +39,16 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const { paths } = await request.json();
+  const { paths = [], tags = [] } = await request.json();
 
+  for (const tag of tags) {
+    if (tag) revalidateTag(tag);
+  }
   for (const path of paths) {
-    revalidatePath(path);
+    if (path) revalidatePath(path);
   }
 
-  return NextResponse.json({ revalidated: true, paths });
+  return NextResponse.json({ revalidated: true, paths, tags });
 }
 ```
 
@@ -61,19 +64,17 @@ FRONTEND_URL = os.getenv("FRONTEND_URL", "https://decume.in")
 REVALIDATE_SECRET = os.getenv("REVALIDATE_SECRET", "")
 
 async def revalidate_paths(paths: list[str]):
-    """Fire-and-forget revalidation request to Next.js frontend."""
-    if not REVALIDATE_SECRET or not FRONTEND_URL:
-        return
-    try:
-        async with httpx.AsyncClient() as client:
-            await client.post(
-                f"{FRONTEND_URL}/api/revalidate",
-                json={"paths": paths},
-                headers={"x-revalidate-secret": REVALIDATE_SECRET},
-                timeout=5.0,
-            )
-    except Exception:
-        pass  # don't block admin actions if revalidation fails
+    await _post_revalidation(paths=paths, tags=[])
+
+async def revalidate_tags(tags: list[str]):
+    await _post_revalidation(paths=[], tags=tags)
+
+async def revalidate_product_reviews(product_id: str, slug: str | None = None):
+    tag = f"product-reviews:{product_id}"
+    paths = [f"/products/{product_id}"]
+    if slug and slug != product_id:
+        paths.append(f"/products/{slug}")
+    await _post_revalidation(paths=paths, tags=[tag])
 ```
 
 ### Step 4: Call from Routers
@@ -127,6 +128,7 @@ const res = await fetch(`${API_URL}/products`, {
 | Create/update/delete **bottle** | `/bottles`, `/products` |
 | Create/update/delete **brand** | `/brands`, `/products` |
 | Create/update/delete **influencer** | `/creators`, `/{username}` |
+| Create/update/delete/hide **review** | tag `product-reviews:{productId}`, `/products/{id}`, `/products/{slug}` |
 | Update **order status** | (no user-facing cached page affected) |
 
 ---
