@@ -4,6 +4,7 @@ from app.schemas.gift_box import GiftBoxCreate, GiftBoxUpdate, GiftBoxOut
 from app.services.gift_box_service import GiftBoxService
 from app.db.mongodb import get_database
 from app.utils.deps import require_admin
+from app.utils.revalidate import revalidate_gift_box
 
 router = APIRouter(prefix="/gift-boxes", tags=["gift-boxes"])
 
@@ -33,7 +34,11 @@ async def create_gift_box(
     _admin=Depends(require_admin),
 ):
     service = GiftBoxService(db)
-    return await service.create(box_in)
+    created = await service.create(box_in)
+    box_id = str(created.get("_id") or created.get("id") or "")
+    if box_id:
+        await revalidate_gift_box(box_id)
+    return created
 
 
 @router.put("/{id}", response_model=GiftBoxOut)
@@ -47,6 +52,7 @@ async def update_gift_box(
     updated = await service.update(id, box_in)
     if not updated:
         raise HTTPException(status_code=404, detail="Gift box not found")
+    await revalidate_gift_box(id)
     return updated
 
 
@@ -58,4 +64,5 @@ async def delete_gift_box(
 ):
     service = GiftBoxService(db)
     await service.delete(id)
+    await revalidate_gift_box(id)
     return None

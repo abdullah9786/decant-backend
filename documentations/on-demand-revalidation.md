@@ -2,152 +2,87 @@
 
 ## Problem
 
-Vercel's free tier has limited Fluid Active CPU and Function Invocations. Time-based ISR (`revalidate: 120`) causes pages to re-render on a schedule even when nothing has changed, wasting resources.
+Time-based ISR (`revalidate: 600` or `60`) causes pages to re-render on a schedule even when nothing has changed, wasting Vercel Fluid CPU and ISR writes.
 
-## Current State (Time-Based ISR)
+## Solution (implemented)
 
-All server-rendered pages use `next: { revalidate: 600 }` (10 minutes). This means every 10 minutes, the next visitor triggers a background re-render — regardless of whether any data changed.
-
-## Proposed Solution: On-Demand Revalidation
-
-Instead of time-based, pages stay cached indefinitely and only re-render when the backend explicitly tells the frontend to do so (after an admin action).
+Pages stay cached for **24 hours** (`86400` seconds) as a safety net. The backend calls `/api/revalidate` after admin mutations so the storefront updates immediately — without scheduled churn.
 
 ---
 
-## Implementation Steps
+## Environment Variables
 
-### Step 1: Environment Variables
-
-Add to both backend `.env` and Vercel frontend environment variables:
+Set on **backend** (`.env`) and **Vercel** (`decant-user`):
 
 ```
-REVALIDATE_SECRET=<generate-a-random-string>
 FRONTEND_URL=https://decume.in
+REVALIDATE_SECRET=<shared-random-secret>
 ```
 
-### Step 2: Next.js Revalidation API Route
-
-Create `frontend-user/src/app/api/revalidate/route.ts`:
-
-```typescript
-import { revalidatePath, revalidateTag } from 'next/cache';
-import { NextRequest, NextResponse } from 'next/server';
-
-export async function POST(request: NextRequest) {
-  const secret = request.headers.get('x-revalidate-secret');
-  if (secret !== process.env.REVALIDATE_SECRET) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-
-  const { paths = [], tags = [] } = await request.json();
-
-  for (const tag of tags) {
-    if (tag) revalidateTag(tag);
-  }
-  for (const path of paths) {
-    if (path) revalidatePath(path);
-  }
-
-  return NextResponse.json({ revalidated: true, paths, tags });
-}
-```
-
-### Step 3: Backend Revalidation Utility
-
-Create `backend/app/utils/revalidate.py`:
-
-```python
-import httpx
-import os
-
-FRONTEND_URL = os.getenv("FRONTEND_URL", "https://decume.in")
-REVALIDATE_SECRET = os.getenv("REVALIDATE_SECRET", "")
-
-async def revalidate_paths(paths: list[str]):
-    await _post_revalidation(paths=paths, tags=[])
-
-async def revalidate_tags(tags: list[str]):
-    await _post_revalidation(paths=[], tags=tags)
-
-async def revalidate_product_reviews(product_id: str, slug: str | None = None):
-    tag = f"product-reviews:{product_id}"
-    paths = [f"/products/{product_id}"]
-    if slug and slug != product_id:
-        paths.append(f"/products/{slug}")
-    await _post_revalidation(paths=paths, tags=[tag])
-```
-
-### Step 4: Call from Routers
-
-Add revalidation calls after create/update/delete operations in each router.
-
-**Example — Product Router:**
-
-```python
-from app.utils.revalidate import revalidate_paths
-
-@router.put("/{id}")
-async def update_product(id: str, product_in: ProductUpdate, ...):
-    updated = await product_service.update(id, product_in)
-    await revalidate_paths(["/", "/products", f"/products/{id}"])
-    return updated
-
-@router.post("")
-async def create_product(product_in: ProductCreate, ...):
-    created = await product_service.create(product_in)
-    await revalidate_paths(["/", "/products"])
-    return created
-
-@router.delete("/{id}")
-async def delete_product(id: str, ...):
-    await product_service.delete(id)
-    await revalidate_paths(["/", "/products"])
-    return None
-```
-
-### Step 5: Update Fetch Revalidation Times
-
-Change all `revalidate` values in the frontend to `86400` (24 hours) as a fallback safety net:
-
-```typescript
-const res = await fetch(`${API_URL}/products`, {
-  next: { revalidate: 86400 },
-});
-```
+If either is missing locally, revalidation calls no-op (safe for dev).
 
 ---
 
-## Revalidation Path Map
+## Frontend
 
-| Admin Action | Paths to Revalidate |
+### Cache config
+
+- `decant-user/src/lib/cacheConfig.ts` — `CACHE_REVALIDATE_SECONDS` (86400 prod, 60 dev)
+- `decant-user/src/lib/cacheTags.ts` — `product-reviews:{id}`, `daily-deal`
+
+### Revalidation API
+
+`decant-user/src/app/api/revalidate/route.ts` — accepts `{ paths?, tags? }` with header `x-revalidate-secret`.
+
+### SEO preserved
+
+- Product `generateMetadata`, JSON-LD (Product, Breadcrumb, **reviews/ratings**), H1, and related products remain **server-rendered**.
+- Review changes still revalidate **paths + tags** so Google sees fresh structured data.
+
+---
+
+## Backend
+
+Utility: `app/utils/revalidate.py`
+
+| Helper | When |
+|--------|------|
+| `revalidate_product(id, slug?)` | Product create/update/delete |
+| `revalidate_products_catalog()` | Bulk chip updates |
+| `revalidate_category(slug?)` | Category CRUD |
+| `revalidate_gift_box(id)` | Gift box CRUD |
+| `revalidate_bottles()` | Bottle CRUD |
+| `revalidate_brands()` | Brand CRUD |
+| `revalidate_fragrance_families()` | Fragrance family CRUD |
+| `revalidate_influencer(username?)` | Influencer / storefront CRUD |
+| `revalidate_daily_deal(product_ids?)` | Offer CRUD (daily deal surfaces + deal PDPs) |
+| `revalidate_product_reviews(id, slug?)` | Review create/update/delete/bulk |
+
+---
+
+## Revalidation path map
+
+| Admin action | Paths / tags |
 |---|---|
-| Create/update/delete **product** | `/`, `/products`, `/products/{id}` |
-| Create/update/delete **category** | `/categories`, `/categories/{slug}` |
-| Create/update/delete **fragrance family** | `/`, `/products`, `/families` |
-| Create/update/delete **gift box** | `/gift-boxes`, `/gift-boxes/{id}` |
-| Create/update/delete **bottle** | `/bottles`, `/products` |
-| Create/update/delete **brand** | `/brands`, `/products` |
-| Create/update/delete **influencer** | `/creators`, `/{username}` |
-| Create/update/delete/hide **review** | tag `product-reviews:{productId}`, `/products/{id}`, `/products/{slug}` |
-| Update **order status** | (no user-facing cached page affected) |
+| Product CRUD | `/`, `/products`, `/sitemap.xml`, `/products/{id}`, `/products/{slug}` |
+| Bulk chips | `/`, `/products`, `/sitemap.xml` |
+| Category CRUD | `/`, `/categories`, `/categories/{slug}` |
+| Gift box CRUD | `/gift-boxes`, `/gift-boxes/{id}` |
+| Bottle CRUD | `/bottles`, `/products` |
+| Brand CRUD | `/brands`, `/products` |
+| Fragrance family CRUD | `/`, `/products`, `/families` |
+| Influencer / storefront | `/creators`, `/sitemap.xml`, `/{username}` |
+| Daily deal offer | tag `daily-deal`, `/`, `/deals/today`, `/products`, `/products/{dealProductId}` |
+| Review change | tag `product-reviews:{id}`, `/products/{id}`, `/products/{slug}` |
 
 ---
 
-## Downsides & Considerations
+## Considerations
 
-1. **More code to maintain** — every new admin endpoint needs the right `revalidate_paths()` call. Easy to forget.
-2. **Direct DB edits won't trigger revalidation** — only admin panel actions do. The 24h fallback covers this.
-3. **Localhost development** — skip revalidation in dev by leaving `REVALIDATE_SECRET` empty locally.
-4. **Bulk operations** — drag-and-drop reordering fires multiple revalidation calls. Consider debouncing or batching.
-5. **Race conditions** — rapid successive edits may briefly show stale data. Self-correcting.
-
-## When to Implement
-
-- Deploy with the current 600s time-based approach first
-- Monitor Vercel usage for 1-2 weeks
-- Only implement on-demand revalidation if still hitting Vercel limits
-- The 600s approach should reduce CPU usage by ~3-5x compared to the original 60-120s values
+1. **Direct DB edits** won't trigger revalidation — only admin panel actions. The 24h fallback covers this.
+2. **Bulk operations** may fire multiple revalidation calls; acceptable at current scale.
+3. **Daily deal midnight rollover** — cached until next visit after 24h unless admin toggles an offer; `ActiveDealProvider` still refetches client-side for live UX.
 
 ## Dependencies
 
-- `httpx` — async HTTP client for Python (add to `requirements.txt` if not present)
+- `httpx` — async HTTP client for revalidation webhooks

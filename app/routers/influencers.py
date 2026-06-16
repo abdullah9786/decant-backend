@@ -12,6 +12,7 @@ from app.services.commission_service import CommissionService
 from app.services.coupon_service import CouponService
 from app.db.mongodb import get_database
 from app.utils.deps import get_current_user, require_admin, require_influencer
+from app.utils.revalidate import revalidate_influencer
 
 router = APIRouter(prefix="/influencers", tags=["influencers"])
 
@@ -67,6 +68,7 @@ async def update_my_profile(
     updated = await svc.update_profile(str(profile["_id"]), data)
     if not updated:
         raise HTTPException(status_code=500, detail="Update failed")
+    await revalidate_influencer(updated.get("username"))
     return updated
 
 
@@ -78,7 +80,9 @@ async def create_section(
 ):
     profile = await _get_influencer_profile(current_user, db)
     svc = InfluencerService(db)
-    return await svc.create_section(str(profile["_id"]), data)
+    section = await svc.create_section(str(profile["_id"]), data)
+    await revalidate_influencer(profile.get("username"))
+    return section
 
 
 @router.put("/me/sections/{section_id}", response_model=SectionOut)
@@ -93,6 +97,7 @@ async def update_section(
     section = await svc.update_section(section_id, str(profile["_id"]), data)
     if not section:
         raise HTTPException(status_code=404, detail="Section not found")
+    await revalidate_influencer(profile.get("username"))
     return section
 
 
@@ -107,6 +112,7 @@ async def delete_section(
     deleted = await svc.delete_section(section_id, str(profile["_id"]))
     if not deleted:
         raise HTTPException(status_code=404, detail="Section not found")
+    await revalidate_influencer(profile.get("username"))
     return None
 
 
@@ -118,7 +124,9 @@ async def reorder_sections(
 ):
     profile = await _get_influencer_profile(current_user, db)
     svc = InfluencerService(db)
-    return await svc.reorder_sections(str(profile["_id"]), data.section_ids)
+    result = await svc.reorder_sections(str(profile["_id"]), data.section_ids)
+    await revalidate_influencer(profile.get("username"))
+    return result
 
 
 @router.get("/me/sections", response_model=List[SectionOut])
@@ -162,9 +170,11 @@ async def admin_create_influencer(
 ):
     svc = InfluencerService(db)
     try:
-        return await svc.create_profile(data)
+        created = await svc.create_profile(data)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    await revalidate_influencer(created.get("username"))
+    return created
 
 
 @router.put("/{profile_id}", response_model=InfluencerProfileOut)
@@ -178,6 +188,7 @@ async def admin_update_influencer(
     updated = await svc.update_profile(profile_id, data)
     if not updated:
         raise HTTPException(status_code=404, detail="Influencer not found")
+    await revalidate_influencer(updated.get("username"))
     return updated
 
 
@@ -191,6 +202,7 @@ async def admin_toggle_active(
     profile = await svc.toggle_active(profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Influencer not found")
+    await revalidate_influencer(profile.get("username"))
     return profile
 
 

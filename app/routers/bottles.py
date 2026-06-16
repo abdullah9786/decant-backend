@@ -4,6 +4,7 @@ from app.schemas.bottle import BottleCreate, BottleUpdate, BottleOut
 from app.services.bottle_service import BottleService
 from app.db.mongodb import get_database
 from app.utils.deps import require_admin
+from app.utils.revalidate import revalidate_bottles
 
 router = APIRouter(prefix="/bottles", tags=["bottles"])
 
@@ -37,7 +38,9 @@ async def create_bottle(
     _admin=Depends(require_admin),
 ):
     service = BottleService(db)
-    return await service.create(data)
+    created = await service.create(data)
+    await revalidate_bottles()
+    return created
 
 
 @router.put("/{id}", response_model=BottleOut)
@@ -51,6 +54,7 @@ async def update_bottle(
     updated = await service.update(id, data)
     if not updated:
         raise HTTPException(status_code=404, detail="Bottle not found")
+    await revalidate_bottles()
     return updated
 
 
@@ -62,4 +66,5 @@ async def delete_bottle(
 ):
     service = BottleService(db)
     await service.delete(id)
+    await revalidate_bottles()
     return None

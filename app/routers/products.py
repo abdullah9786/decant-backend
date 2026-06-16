@@ -12,8 +12,18 @@ from app.services.offer_service import OfferService
 from app.services.pricing_service import apply_daily_deal
 from app.db.mongodb import get_database
 from app.utils.deps import require_admin
+from app.utils.revalidate import (
+    revalidate_product,
+    revalidate_products_catalog,
+)
 
 router = APIRouter(prefix="/products", tags=["products"])
+
+
+def _product_slug(product: dict) -> str | None:
+    pid = str(product.get("_id") or product.get("id") or "")
+    slug = product.get("slug")
+    return slug if slug and slug != pid else None
 
 
 async def _annotate_with_deal(db, products):
@@ -38,6 +48,7 @@ async def bulk_update_chips(
     """Atomically add/remove chip ids across many products in one request."""
     product_service = ProductService(db)
     result = await product_service.bulk_update_chips(body.product_ids, body.add, body.remove)
+    await revalidate_products_catalog()
     return result
 
 @router.get("", response_model=List[ProductOut])
@@ -116,9 +127,12 @@ async def get_product(id_or_slug: str, db=Depends(get_database)):
 async def create_product(product_in: ProductCreate, db=Depends(get_database), _admin=Depends(require_admin)):
     product_service = ProductService(db)
     try:
-        return await product_service.create(product_in)
+        created = await product_service.create(product_in)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    pid = str(created.get("_id") or created.get("id") or "")
+    await revalidate_product(pid, _product_slug(created))
+    return created
 
 @router.put("/{id}", response_model=ProductOut)
 async def update_product(id: str, product_in: ProductUpdate, db=Depends(get_database), _admin=Depends(require_admin)):
@@ -129,10 +143,18 @@ async def update_product(id: str, product_in: ProductUpdate, db=Depends(get_data
         raise HTTPException(status_code=400, detail=str(exc))
     if not updated:
         raise HTTPException(status_code=404, detail="Product not found")
+    pid = str(updated.get("_id") or updated.get("id") or id)
+    await revalidate_product(pid, _product_slug(updated))
     return updated
 
 @router.delete("/{id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_product(id: str, db=Depends(get_database), _admin=Depends(require_admin)):
     product_service = ProductService(db)
+    existing = await product_service.get_by_id_or_slug(id)
     await product_service.delete(id)
+    if existing:
+        pid = str(existing.get("_id") or existing.get("id") or id)
+        await revalidate_product(pid, _product_slug(existing))
+    else:
+        await revalidate_products_catalog()
     return None

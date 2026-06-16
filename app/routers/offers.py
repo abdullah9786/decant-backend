@@ -6,8 +6,16 @@ from app.services.offer_service import OfferService
 from app.services.pricing_service import apply_daily_deal
 from app.db.mongodb import get_database
 from app.utils.deps import require_admin
+from app.utils.revalidate import revalidate_daily_deal
 
 router = APIRouter(prefix="/offers", tags=["offers"])
+
+
+def _daily_deal_product_ids(offer: dict | None) -> list[str]:
+    if not offer or offer.get("type") != "daily_deal":
+        return []
+    config = offer.get("config") or {}
+    return [str(pid) for pid in (config.get("product_ids") or []) if pid]
 
 
 def _jsonify(value: Any) -> Any:
@@ -119,7 +127,9 @@ async def create_offer(offer_in: OfferCreate, db=Depends(get_database), _admin=D
         offer_in.ends_at,
         offer_in.is_active,
     )
-    return await service.create(offer_in)
+    created = await service.create(offer_in)
+    await revalidate_daily_deal(_daily_deal_product_ids(created))
+    return created
 
 
 @router.put("/{id}", response_model=OfferOut)
@@ -142,11 +152,15 @@ async def update_offer(id: str, offer_in: OfferUpdate, db=Depends(get_database),
         merged_active,
         exclude_id=id,
     )
-    return await service.update(id, offer_in)
+    updated = await service.update(id, offer_in)
+    await revalidate_daily_deal(_daily_deal_product_ids(updated))
+    return updated
 
 
 @router.delete("/{id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_offer(id: str, db=Depends(get_database), _admin=Depends(require_admin)):
     service = OfferService(db)
+    existing = await service.get_by_id(id)
     await service.delete(id)
+    await revalidate_daily_deal(_daily_deal_product_ids(existing))
     return None
