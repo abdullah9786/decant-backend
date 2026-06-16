@@ -91,6 +91,19 @@ async def search_products(
     return result
 
 
+@router.get("/{id_or_slug}/related", response_model=List[ProductOut])
+async def get_related_products(
+    id_or_slug: str,
+    limit: int = Query(4, ge=1, le=12),
+    db=Depends(get_database),
+):
+    product_service = ProductService(db)
+    products = await product_service.get_related(id_or_slug, limit=limit)
+    if products is None:
+        raise HTTPException(status_code=404, detail="Product not found")
+    return await _annotate_with_deal(db, products)
+
+
 @router.get("/{id_or_slug}", response_model=ProductOut)
 async def get_product(id_or_slug: str, db=Depends(get_database)):
     product_service = ProductService(db)

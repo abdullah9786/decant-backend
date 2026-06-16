@@ -198,6 +198,207 @@ class ProductService:
                 return product
         return await self.get_by_slug(identifier)
 
+    async def _build_related_context(self, source: dict) -> dict:
+        """Collect families, brands, categories, and chips used to score related items."""
+        families: set[str] = set()
+        brands: set[str] = set()
+        category_ids = {str(c) for c in (source.get("category_ids") or [])}
+        chip_ids = {str(c) for c in (source.get("chip_ids") or [])}
+
+        family = (source.get("fragrance_family") or "").strip()
+        if family:
+            families.add(family)
+        brand = (source.get("brand") or "").strip()
+        if brand:
+            brands.add(brand)
+
+        if source.get("product_type") == "set":
+            for item in source.get("set_items") or []:
+                pid = str(item.get("product_id") or "")
+                if not ObjectId.is_valid(pid):
+                    continue
+                comp = await self.collection.find_one(
+                    {"_id": ObjectId(pid)},
+                    {"fragrance_family": 1, "brand": 1, "category_ids": 1},
+                )
+                if not comp:
+                    continue
+                comp_family = (comp.get("fragrance_family") or "").strip()
+                if comp_family:
+                    families.add(comp_family)
+                comp_brand = (comp.get("brand") or "").strip()
+                if comp_brand:
+                    brands.add(comp_brand)
+                for cid in comp.get("category_ids") or []:
+                    category_ids.add(str(cid))
+
+        return {
+            "families": families,
+            "brands": brands,
+            "category_ids": category_ids,
+            "chip_ids": chip_ids,
+        }
+
+    def _product_note_set(self, product: dict) -> set[str]:
+        notes: list[str] = []
+        notes.extend(product.get("notes_top") or [])
+        notes.extend(product.get("notes_middle") or [])
+        notes.extend(product.get("notes_base") or [])
+        return {n.strip().lower() for n in notes if isinstance(n, str) and n.strip()}
+
+    def _score_related_product(self, source: dict, candidate: dict, ctx: dict) -> float:
+        if str(source.get("_id")) == str(candidate.get("_id")):
+            return -1.0
+
+        score = 0.0
+        family = (candidate.get("fragrance_family") or "").strip()
+        if family and family in ctx["families"]:
+            score += 4.0
+
+        cand_cats = {str(c) for c in (candidate.get("category_ids") or [])}
+        if cand_cats & ctx["category_ids"]:
+            score += 3.0
+
+        cand_chips = {str(c) for c in (candidate.get("chip_ids") or [])}
+        if cand_chips & ctx["chip_ids"]:
+            score += 2.0
+
+        brand = (candidate.get("brand") or "").strip()
+        if brand and brand in ctx["brands"]:
+            score += 1.0
+
+        note_overlap = self._product_note_set(source) & self._product_note_set(candidate)
+        if note_overlap:
+            score += min(len(note_overlap), 2)
+
+        if source.get("product_type") == "set" and candidate.get("product_type") == "set":
+            score += 1.0
+
+        if candidate.get("is_featured"):
+            score += 0.5
+
+        return score
+
+    def _is_in_stock(self, product: dict) -> bool:
+        if product.get("product_type") == "set":
+            set_items = product.get("set_items") or []
+            decant_variants = [
+                v for v in (product.get("variants") or [])
+                if not v.get("is_pack") and int(v.get("size_ml") or 0) > 0
+            ]
+            if not set_items or not decant_variants:
+                return False
+            for variant in decant_variants:
+                size_ml = int(variant.get("size_ml") or 0)
+                if all(int(item.get("stock_ml") or 0) >= size_ml for item in set_items):
+                    return True
+            return False
+
+        variants = product.get("variants") or []
+        if not variants:
+            return False
+        stock_ml = int(product.get("stock_ml") or 0)
+        for variant in variants:
+            if variant.get("is_pack"):
+                if int(variant.get("stock") or 0) >= 1:
+                    return True
+            elif stock_ml >= int(variant.get("size_ml") or 0):
+                return True
+        return False
+
+    async def _normalize_product_for_list(self, product: dict, active_chips_by_id: dict) -> dict:
+        product = await self._ensure_stock_ml(product)
+        product = await self._enrich_set_items(product)
+        return self._attach_chips(product, active_chips_by_id)
+
+    async def get_related(self, identifier: str, limit: int = 4) -> Optional[List[dict]]:
+        source = await self.get_by_id_or_slug(identifier)
+        if not source:
+            return None
+
+        ctx = await self._build_related_context(source)
+        or_clauses: list[dict] = []
+        if ctx["families"]:
+            or_clauses.append({"fragrance_family": {"$in": list(ctx["families"])}})
+        if ctx["brands"]:
+            or_clauses.append({"brand": {"$in": list(ctx["brands"])}})
+        if ctx["category_ids"]:
+            or_clauses.append({"category_ids": {"$in": list(ctx["category_ids"])}})
+        if ctx["chip_ids"]:
+            or_clauses.append({"chip_ids": {"$in": list(ctx["chip_ids"])}})
+
+        query: dict = {
+            "is_active": {"$ne": False},
+            "_id": {"$ne": source["_id"]},
+        }
+        if or_clauses:
+            query["$or"] = or_clauses
+
+        cursor = self.collection.find(query).sort([("sort_order", 1), ("created_at", -1)])
+        raw_candidates = await cursor.to_list(length=100)
+        active_chips_by_id = await self._fetch_active_chips_by_id()
+
+        scored: list[tuple[float, int, int, dict]] = []
+        seen_ids: set[str] = set()
+        for raw in raw_candidates:
+            product = await self._normalize_product_for_list(raw, active_chips_by_id)
+            pid = str(product["_id"])
+            if pid in seen_ids:
+                continue
+            seen_ids.add(pid)
+            relevance = self._score_related_product(source, product, ctx)
+            if relevance <= 0:
+                continue
+            scored.append((
+                relevance,
+                1 if self._is_in_stock(product) else 0,
+                int(product.get("sort_order") or 0),
+                product,
+            ))
+
+        scored.sort(key=lambda row: (-row[0], -row[1], row[2]))
+
+        if len(scored) < limit:
+            for raw in raw_candidates:
+                if len(scored) >= limit:
+                    break
+                product = await self._normalize_product_for_list(raw, active_chips_by_id)
+                pid = str(product["_id"])
+                if pid in {str(row[3]["_id"]) for row in scored}:
+                    continue
+                scored.append((
+                    0.0,
+                    1 if self._is_in_stock(product) else 0,
+                    int(product.get("sort_order") or 0),
+                    product,
+                ))
+            scored.sort(key=lambda row: (-row[0], -row[1], row[2]))
+
+        if len(scored) < limit:
+            fallback_cursor = self.collection.find({
+                "is_active": {"$ne": False},
+                "_id": {"$ne": source["_id"]},
+            }).sort([("sort_order", 1), ("created_at", -1)])
+            fallback_raw = await fallback_cursor.to_list(length=50)
+            picked = {str(row[3]["_id"]) for row in scored}
+            for raw in fallback_raw:
+                if len(scored) >= limit:
+                    break
+                pid = str(raw["_id"])
+                if pid in picked:
+                    continue
+                product = await self._normalize_product_for_list(raw, active_chips_by_id)
+                scored.append((
+                    0.0,
+                    1 if self._is_in_stock(product) else 0,
+                    int(product.get("sort_order") or 0),
+                    product,
+                ))
+                picked.add(pid)
+            scored.sort(key=lambda row: (-row[0], -row[1], row[2]))
+
+        return [row[3] for row in scored[:limit]]
+
     async def create(self, product_in: ProductCreate):
         product_dict = product_in.dict()
         await self._validate_product(product_dict)
