@@ -1,11 +1,14 @@
-from motor.motor_asyncio import AsyncIOMotorDatabase
-from app.schemas.product import ProductCreate, ProductUpdate
-from app.services.chip_service import ChipService
-from bson import ObjectId
-from typing import List, Optional
-from datetime import datetime, timezone
+import asyncio
 import re
 import unicodedata
+from datetime import datetime, timezone
+from typing import List, Optional
+
+from bson import ObjectId
+from motor.motor_asyncio import AsyncIOMotorDatabase
+
+from app.schemas.product import ProductCreate, ProductUpdate
+from app.services.chip_service import ChipService
 
 
 def _slugify(text: str) -> str:
@@ -213,24 +216,26 @@ class ProductService:
             brands.add(brand)
 
         if source.get("product_type") == "set":
+            set_pids: list[ObjectId] = []
             for item in source.get("set_items") or []:
                 pid = str(item.get("product_id") or "")
-                if not ObjectId.is_valid(pid):
-                    continue
-                comp = await self.collection.find_one(
-                    {"_id": ObjectId(pid)},
+                if ObjectId.is_valid(pid):
+                    set_pids.append(ObjectId(pid))
+            if set_pids:
+                cursor = self.collection.find(
+                    {"_id": {"$in": set_pids}},
                     {"fragrance_family": 1, "brand": 1, "category_ids": 1},
                 )
-                if not comp:
-                    continue
-                comp_family = (comp.get("fragrance_family") or "").strip()
-                if comp_family:
-                    families.add(comp_family)
-                comp_brand = (comp.get("brand") or "").strip()
-                if comp_brand:
-                    brands.add(comp_brand)
-                for cid in comp.get("category_ids") or []:
-                    category_ids.add(str(cid))
+                comps = await cursor.to_list(length=len(set_pids))
+                for comp in comps:
+                    comp_family = (comp.get("fragrance_family") or "").strip()
+                    if comp_family:
+                        families.add(comp_family)
+                    comp_brand = (comp.get("brand") or "").strip()
+                    if comp_brand:
+                        brands.add(comp_brand)
+                    for cid in comp.get("category_ids") or []:
+                        category_ids.add(str(cid))
 
         return {
             "families": families,
@@ -311,6 +316,27 @@ class ProductService:
         product = await self._enrich_set_items(product)
         return self._attach_chips(product, active_chips_by_id)
 
+    async def _normalize_many_for_list(
+        self,
+        raws: List[dict],
+        active_chips_by_id: dict,
+        *,
+        concurrency: int = 32,
+    ) -> List[dict]:
+        """Normalize many product docs in parallel (bounded concurrency).
+
+        Replaces sequential awaits in get_related — major PDP latency win.
+        """
+        if not raws:
+            return []
+        sem = asyncio.Semaphore(concurrency)
+
+        async def _one(raw: dict) -> dict:
+            async with sem:
+                return await self._normalize_product_for_list(raw, active_chips_by_id)
+
+        return list(await asyncio.gather(*(_one(r) for r in raws)))
+
     async def get_related(self, identifier: str, limit: int = 10) -> Optional[List[dict]]:
         source = await self.get_by_id_or_slug(identifier)
         if not source:
@@ -338,10 +364,12 @@ class ProductService:
         raw_candidates = await cursor.to_list(length=100)
         active_chips_by_id = await self._fetch_active_chips_by_id()
 
+        normalized = await self._normalize_many_for_list(raw_candidates, active_chips_by_id)
+        by_id = {str(p["_id"]): p for p in normalized}
+
         scored: list[tuple[float, int, int, dict]] = []
         seen_ids: set[str] = set()
-        for raw in raw_candidates:
-            product = await self._normalize_product_for_list(raw, active_chips_by_id)
+        for product in normalized:
             pid = str(product["_id"])
             if pid in seen_ids:
                 continue
@@ -359,19 +387,21 @@ class ProductService:
         scored.sort(key=lambda row: (-row[0], -row[1], row[2]))
 
         if len(scored) < limit:
+            scored_ids = {str(row[3]["_id"]) for row in scored}
             for raw in raw_candidates:
                 if len(scored) >= limit:
                     break
-                product = await self._normalize_product_for_list(raw, active_chips_by_id)
-                pid = str(product["_id"])
-                if pid in {str(row[3]["_id"]) for row in scored}:
+                pid = str(raw["_id"])
+                if pid in scored_ids:
                     continue
+                product = by_id[pid]
                 scored.append((
                     0.0,
                     1 if self._is_in_stock(product) else 0,
                     int(product.get("sort_order") or 0),
                     product,
                 ))
+                scored_ids.add(pid)
             scored.sort(key=lambda row: (-row[0], -row[1], row[2]))
 
         if len(scored) < limit:
@@ -381,20 +411,21 @@ class ProductService:
             }).sort([("sort_order", 1), ("created_at", -1)])
             fallback_raw = await fallback_cursor.to_list(length=50)
             picked = {str(row[3]["_id"]) for row in scored}
-            for raw in fallback_raw:
-                if len(scored) >= limit:
-                    break
-                pid = str(raw["_id"])
-                if pid in picked:
-                    continue
-                product = await self._normalize_product_for_list(raw, active_chips_by_id)
-                scored.append((
-                    0.0,
-                    1 if self._is_in_stock(product) else 0,
-                    int(product.get("sort_order") or 0),
-                    product,
-                ))
-                picked.add(pid)
+            if fallback_raw:
+                normed_fb = await self._normalize_many_for_list(fallback_raw, active_chips_by_id)
+                for product in normed_fb:
+                    if len(scored) >= limit:
+                        break
+                    pid = str(product["_id"])
+                    if pid in picked:
+                        continue
+                    scored.append((
+                        0.0,
+                        1 if self._is_in_stock(product) else 0,
+                        int(product.get("sort_order") or 0),
+                        product,
+                    ))
+                    picked.add(pid)
             scored.sort(key=lambda row: (-row[0], -row[1], row[2]))
 
         return [row[3] for row in scored[:limit]]
@@ -577,12 +608,26 @@ class ProductService:
         if not product or product.get("product_type") != "set":
             return product
 
-        enriched = []
-        for item in product.get("set_items") or []:
+        items = product.get("set_items") or []
+        oids: list[ObjectId] = []
+        pid_order: list[str] = []
+        for item in items:
             pid = str(item.get("product_id") or "")
-            comp = None
             if ObjectId.is_valid(pid):
-                comp = await self.collection.find_one({"_id": ObjectId(pid)})
+                oid = ObjectId(pid)
+                oids.append(oid)
+                pid_order.append(pid)
+
+        comps_by_id: dict[str, dict] = {}
+        if oids:
+            cursor = self.collection.find({"_id": {"$in": oids}})
+            found = await cursor.to_list(length=len(oids))
+            comps_by_id = {str(doc["_id"]): doc for doc in found}
+
+        enriched = []
+        for item in items:
+            pid = str(item.get("product_id") or "")
+            comp = comps_by_id.get(pid) if ObjectId.is_valid(pid) else None
             enriched.append({
                 "product_id": pid,
                 "name": comp.get("name") if comp else item.get("name", ""),
