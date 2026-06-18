@@ -69,6 +69,25 @@ async def connect_to_mongo():
             e,
         )
 
+    # Blog: moderation queue + author listing + unique published slugs
+    try:
+        await db.db["blog_posts"].create_index(
+            [("status", 1), ("moderation.submitted_at", -1)],
+            name="blog_status_submitted",
+        )
+        await db.db["blog_posts"].create_index(
+            [("author_id", 1), ("status", 1), ("updated_at", -1)],
+            name="blog_author_status_updated",
+        )
+        await db.db["blog_posts"].create_index(
+            "slug",
+            unique=True,
+            name="blog_slug_unique_published",
+            partialFilterExpression={"status": "published"},
+        )
+    except (DuplicateKeyError, OperationFailure) as e:
+        logging.warning("Blog indexes: %s", e)
+
     print(f"\n\033[92m[SUCCESS]\033[0m Database connected: {settings.DATABASE_NAME}")
     logging.info(f"Connected to MongoDB: {settings.DATABASE_NAME}")
 

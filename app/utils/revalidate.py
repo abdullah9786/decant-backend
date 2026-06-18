@@ -112,6 +112,14 @@ async def revalidate_daily_deal(product_ids: list[str] | None = None) -> None:
     )
 
 
+async def revalidate_blog_post(slug: str | None = None) -> None:
+    """Invalidate blog listing, article, and sitemap after publish/update/unpublish."""
+    paths = ["/blog", "/sitemap.xml"]
+    if slug:
+        paths.append(f"/blog/{slug}")
+    await revalidate_paths(paths)
+
+
 async def revalidate_product_reviews(product_id: str, slug: str | None = None) -> None:
     """Invalidate cached review data and the product detail page (SEO JSON-LD)."""
     tag = f"product-reviews:{product_id}"
