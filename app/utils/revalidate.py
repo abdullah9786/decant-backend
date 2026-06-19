@@ -95,8 +95,16 @@ async def revalidate_influencer(username: str | None = None) -> None:
     await revalidate_paths(paths)
 
 
-async def revalidate_daily_deal(product_ids: list[str] | None = None) -> None:
-    """Invalidate deal surfaces site-wide (root layout + homepage + deal page)."""
+async def revalidate_daily_deal(
+    product_ids: list[str] | None = None,
+    *,
+    extra_paths: list[str] | None = None,
+) -> None:
+    """Invalidate deal surfaces site-wide (root layout + homepage + deal page).
+
+    PDPs are fetched as ``/products/{idOrSlug}``; callers should pass slug
+    URLs via ``extra_paths`` so Next path cache matches how users open links.
+    """
     paths = ["/", "/deals/today", "/products"]
     seen = set(paths)
     for pid in product_ids or []:
@@ -106,6 +114,13 @@ async def revalidate_daily_deal(product_ids: list[str] | None = None) -> None:
         if path not in seen:
             paths.append(path)
             seen.add(path)
+    for raw in extra_paths or []:
+        if not raw or not isinstance(raw, str):
+            continue
+        p = raw.strip()
+        if p and p not in seen:
+            paths.append(p)
+            seen.add(p)
     await _post_revalidation(
         paths=paths,
         tags=[DAILY_DEAL_TAG],

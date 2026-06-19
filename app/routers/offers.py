@@ -18,6 +18,29 @@ def _daily_deal_product_ids(offer: dict | None) -> list[str]:
     return [str(pid) for pid in (config.get("product_ids") or []) if pid]
 
 
+async def _daily_deal_pdp_slug_paths(db, product_ids: list[str]) -> list[str]:
+    """``/products/{slug}`` paths for ``revalidatePath`` (id-only paths miss real URLs)."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for pid in product_ids:
+        if not pid or not ObjectId.is_valid(str(pid)):
+            continue
+        doc = await db["products"].find_one(
+            {"_id": ObjectId(str(pid))},
+            {"slug": 1},
+        )
+        if not doc:
+            continue
+        slug = doc.get("slug")
+        if not slug or str(slug) == str(pid):
+            continue
+        path = f"/products/{slug}"
+        if path not in seen:
+            seen.add(path)
+            out.append(path)
+    return out
+
+
 def _jsonify(value: Any) -> Any:
     """Recursively convert Mongo-specific types (ObjectId, datetime) into
     JSON-safe primitives. We need this because the daily-deal endpoint
@@ -128,7 +151,8 @@ async def create_offer(offer_in: OfferCreate, db=Depends(get_database), _admin=D
         offer_in.is_active,
     )
     created = await service.create(offer_in)
-    await revalidate_daily_deal(_daily_deal_product_ids(created))
+    ids = _daily_deal_product_ids(created)
+    await revalidate_daily_deal(ids, extra_paths=await _daily_deal_pdp_slug_paths(db, ids))
     return created
 
 
@@ -153,7 +177,8 @@ async def update_offer(id: str, offer_in: OfferUpdate, db=Depends(get_database),
         exclude_id=id,
     )
     updated = await service.update(id, offer_in)
-    await revalidate_daily_deal(_daily_deal_product_ids(updated))
+    ids = _daily_deal_product_ids(updated)
+    await revalidate_daily_deal(ids, extra_paths=await _daily_deal_pdp_slug_paths(db, ids))
     return updated
 
 
@@ -161,6 +186,7 @@ async def update_offer(id: str, offer_in: OfferUpdate, db=Depends(get_database),
 async def delete_offer(id: str, db=Depends(get_database), _admin=Depends(require_admin)):
     service = OfferService(db)
     existing = await service.get_by_id(id)
+    ids = _daily_deal_product_ids(existing)
     await service.delete(id)
-    await revalidate_daily_deal(_daily_deal_product_ids(existing))
+    await revalidate_daily_deal(ids, extra_paths=await _daily_deal_pdp_slug_paths(db, ids))
     return None

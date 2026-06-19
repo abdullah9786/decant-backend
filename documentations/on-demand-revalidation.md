@@ -55,7 +55,7 @@ Utility: `app/utils/revalidate.py`
 | `revalidate_brands()` | Brand CRUD |
 | `revalidate_fragrance_families()` | Fragrance family CRUD |
 | `revalidate_influencer(username?)` | Influencer / storefront CRUD |
-| `revalidate_daily_deal(product_ids?)` | Offer CRUD (daily deal surfaces + deal PDPs) |
+| `revalidate_daily_deal(product_ids?, extra_paths=…)` | Offer CRUD (daily deal `daily-deal` tag + paths incl. slug PDPs) |
 | `revalidate_product_reviews(id, slug?)` | Review create/update/delete/bulk |
 
 ---
@@ -72,7 +72,7 @@ Utility: `app/utils/revalidate.py`
 | Brand CRUD | `/brands`, `/products` |
 | Fragrance family CRUD | `/`, `/products`, `/families` |
 | Influencer / storefront | `/creators`, `/sitemap.xml`, `/{username}` |
-| Daily deal offer | tag `daily-deal`, `/`, `/deals/today`, `/products`, `/products/{dealProductId}` |
+| Daily deal offer | tag `daily-deal`, `/`, `/deals/today`, `/products`, `/products/{dealProductId}`, `/products/{slug}` for each deal product |
 | Review change | tag `product-reviews:{id}`, `/products/{id}`, `/products/{slug}` |
 
 ---
