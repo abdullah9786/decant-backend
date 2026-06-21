@@ -88,6 +88,22 @@ async def connect_to_mongo():
     except (DuplicateKeyError, OperationFailure) as e:
         logging.warning("Blog indexes: %s", e)
 
+    # Products: speed up the "You may also like" rail. The related query is an
+    # $or over these fields filtered by is_active and sorted by sort_order /
+    # created_at, so single-field indexes (used via index-union for $or) plus a
+    # sort index keep it off collection scans.
+    try:
+        await db.db["products"].create_index("fragrance_family", name="product_fragrance_family")
+        await db.db["products"].create_index("brand", name="product_brand")
+        await db.db["products"].create_index("category_ids", name="product_category_ids")
+        await db.db["products"].create_index("chip_ids", name="product_chip_ids")
+        await db.db["products"].create_index(
+            [("sort_order", 1), ("created_at", -1)],
+            name="product_sort_order_created",
+        )
+    except (DuplicateKeyError, OperationFailure) as e:
+        logging.warning("Product related-query indexes: %s", e)
+
     print(f"\n\033[92m[SUCCESS]\033[0m Database connected: {settings.DATABASE_NAME}")
     logging.info(f"Connected to MongoDB: {settings.DATABASE_NAME}")
 
