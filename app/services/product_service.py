@@ -19,46 +19,6 @@ def _slugify(text: str) -> str:
     return text.strip("-")
 
 
-# Only the fields the "You may also like" rail needs: scoring inputs +
-# ProductCard display + normalization (set items / chips / stock). Keeping the
-# projection tight avoids pulling heavy fields (description, SEO blobs, note
-# descriptions, etc.) for up to 100 candidates on every PDP-related fetch.
-_RELATED_CANDIDATE_PROJECTION = {
-    "name": 1,
-    "brand": 1,
-    "slug": 1,
-    "image_url": 1,
-    "variants": 1,
-    "stock_ml": 1,
-    "is_featured": 1,
-    "is_new_arrival": 1,
-    "notes_top": 1,
-    "notes_middle": 1,
-    "notes_base": 1,
-    "product_type": 1,
-    "set_items": 1,
-    "category_ids": 1,
-    "chip_ids": 1,
-    "fragrance_family": 1,
-    "sort_order": 1,
-    "created_at": 1,
-}
-
-# Source product only needs the fields used to build the related-context and
-# to score note overlap — no enrichment, no display fields.
-_RELATED_SOURCE_PROJECTION = {
-    "fragrance_family": 1,
-    "brand": 1,
-    "category_ids": 1,
-    "chip_ids": 1,
-    "notes_top": 1,
-    "notes_middle": 1,
-    "notes_base": 1,
-    "product_type": 1,
-    "set_items": 1,
-}
-
-
 class ProductService:
     def __init__(self, db: AsyncIOMotorDatabase):
         self.db = db
@@ -351,34 +311,8 @@ class ProductService:
                 return True
         return False
 
-    def _ensure_stock_ml_readonly(self, product: Optional[dict]) -> Optional[dict]:
-        """In-memory variant of _ensure_stock_ml — never writes back to Mongo.
-
-        Used on read-heavy list paths (e.g. related products) so that fetching
-        a PDP rail can't trigger up to 100 write-on-read updates. The backfill
-        write still happens on the canonical single-product reads.
-        """
-        if not product:
-            return product
-        if product.get("product_type") == "set":
-            return product
-        if product.get("stock_ml") is None:
-            computed = 0
-            for v in product.get("variants", []) or []:
-                try:
-                    computed += int(v.get("size_ml", 0)) * int(v.get("stock", 0))
-                except Exception:
-                    continue
-            product["stock_ml"] = computed
-        return product
-
     async def _normalize_product_for_list(self, product: dict, active_chips_by_id: dict) -> dict:
-        product = self._ensure_stock_ml_readonly(product)
-        # The related-rail projection intentionally omits heavy fields the card
-        # never renders (description, SEO blobs). ProductOut still requires
-        # `description`, so supply a lean default to satisfy validation without
-        # paying to fetch the full body.
-        product.setdefault("description", "")
+        product = await self._ensure_stock_ml(product)
         product = await self._enrich_set_items(product)
         return self._attach_chips(product, active_chips_by_id)
 
@@ -403,25 +337,8 @@ class ProductService:
 
         return list(await asyncio.gather(*(_one(r) for r in raws)))
 
-    async def _get_related_source(self, identifier: str) -> Optional[dict]:
-        """Lightweight source fetch for related scoring.
-
-        Unlike get_by_id_or_slug, this avoids enrichment, chip attachment and
-        the stock_ml write-on-read — we only need the fields that feed
-        _build_related_context and note-overlap scoring.
-        """
-        if ObjectId.is_valid(identifier):
-            source = await self.collection.find_one(
-                {"_id": ObjectId(identifier)}, _RELATED_SOURCE_PROJECTION
-            )
-            if source:
-                return source
-        return await self.collection.find_one(
-            {"slug": identifier}, _RELATED_SOURCE_PROJECTION
-        )
-
     async def get_related(self, identifier: str, limit: int = 10) -> Optional[List[dict]]:
-        source = await self._get_related_source(identifier)
+        source = await self.get_by_id_or_slug(identifier)
         if not source:
             return None
 
@@ -443,68 +360,75 @@ class ProductService:
         if or_clauses:
             query["$or"] = or_clauses
 
-        cursor = self.collection.find(
-            query, _RELATED_CANDIDATE_PROJECTION
-        ).sort([("sort_order", 1), ("created_at", -1)])
+        cursor = self.collection.find(query).sort([("sort_order", 1), ("created_at", -1)])
         raw_candidates = await cursor.to_list(length=100)
+        active_chips_by_id = await self._fetch_active_chips_by_id()
 
-        # Score on the raw (projected) docs — relevance only depends on raw
-        # fields — so we skip normalizing the whole candidate pool. We only
-        # enrich the handful of winners below.
+        normalized = await self._normalize_many_for_list(raw_candidates, active_chips_by_id)
+        by_id = {str(p["_id"]): p for p in normalized}
+
         scored: list[tuple[float, int, int, dict]] = []
-        chosen: list[dict] = []
-        chosen_ids: set[str] = set()
-        for cand in raw_candidates:
-            pid = str(cand["_id"])
-            if pid in chosen_ids:
+        seen_ids: set[str] = set()
+        for product in normalized:
+            pid = str(product["_id"])
+            if pid in seen_ids:
                 continue
-            self._ensure_stock_ml_readonly(cand)
-            relevance = self._score_related_product(source, cand, ctx)
+            seen_ids.add(pid)
+            relevance = self._score_related_product(source, product, ctx)
             if relevance <= 0:
                 continue
-            chosen_ids.add(pid)
             scored.append((
                 relevance,
-                1 if self._is_in_stock(cand) else 0,
-                int(cand.get("sort_order") or 0),
-                cand,
+                1 if self._is_in_stock(product) else 0,
+                int(product.get("sort_order") or 0),
+                product,
             ))
 
         scored.sort(key=lambda row: (-row[0], -row[1], row[2]))
-        chosen = [row[3] for row in scored[:limit]]
-        chosen_ids = {str(c["_id"]) for c in chosen}
 
-        # Top up with relevance-0 candidates from the same pool (already sorted
-        # by sort_order / created_at).
-        if len(chosen) < limit:
-            for cand in raw_candidates:
-                if len(chosen) >= limit:
+        if len(scored) < limit:
+            scored_ids = {str(row[3]["_id"]) for row in scored}
+            for raw in raw_candidates:
+                if len(scored) >= limit:
                     break
-                pid = str(cand["_id"])
-                if pid in chosen_ids:
+                pid = str(raw["_id"])
+                if pid in scored_ids:
                     continue
-                chosen.append(cand)
-                chosen_ids.add(pid)
+                product = by_id[pid]
+                scored.append((
+                    0.0,
+                    1 if self._is_in_stock(product) else 0,
+                    int(product.get("sort_order") or 0),
+                    product,
+                ))
+                scored_ids.add(pid)
+            scored.sort(key=lambda row: (-row[0], -row[1], row[2]))
 
-        # Last resort: backfill from the global active catalogue.
-        if len(chosen) < limit:
-            fallback_cursor = self.collection.find(
-                {"is_active": {"$ne": False}, "_id": {"$ne": source["_id"]}},
-                _RELATED_CANDIDATE_PROJECTION,
-            ).sort([("sort_order", 1), ("created_at", -1)])
+        if len(scored) < limit:
+            fallback_cursor = self.collection.find({
+                "is_active": {"$ne": False},
+                "_id": {"$ne": source["_id"]},
+            }).sort([("sort_order", 1), ("created_at", -1)])
             fallback_raw = await fallback_cursor.to_list(length=50)
-            for cand in fallback_raw:
-                if len(chosen) >= limit:
-                    break
-                pid = str(cand["_id"])
-                if pid in chosen_ids:
-                    continue
-                chosen.append(cand)
-                chosen_ids.add(pid)
+            picked = {str(row[3]["_id"]) for row in scored}
+            if fallback_raw:
+                normed_fb = await self._normalize_many_for_list(fallback_raw, active_chips_by_id)
+                for product in normed_fb:
+                    if len(scored) >= limit:
+                        break
+                    pid = str(product["_id"])
+                    if pid in picked:
+                        continue
+                    scored.append((
+                        0.0,
+                        1 if self._is_in_stock(product) else 0,
+                        int(product.get("sort_order") or 0),
+                        product,
+                    ))
+                    picked.add(pid)
+            scored.sort(key=lambda row: (-row[0], -row[1], row[2]))
 
-        # Normalize ONLY the final selection (set-item enrichment + chips).
-        active_chips_by_id = await self._fetch_active_chips_by_id()
-        return await self._normalize_many_for_list(chosen[:limit], active_chips_by_id)
+        return [row[3] for row in scored[:limit]]
 
     async def create(self, product_in: ProductCreate):
         product_dict = product_in.dict()
