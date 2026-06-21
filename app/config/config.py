@@ -26,6 +26,7 @@ class Settings(BaseSettings):
         "https://decant-influencer-stage.vercel.app/",
         "https://admin.decume.in",
         "https://decume.in",
+        "https://www.decume.in",
         "https://my.decume.in"
     ]
 
