@@ -88,6 +88,18 @@ async def connect_to_mongo():
     except (DuplicateKeyError, OperationFailure) as e:
         logging.warning("Blog indexes: %s", e)
 
+    # Products: category listing/grid filters by `category_ids` and sorts by
+    # sort_order / created_at. Without these the category detail page does a
+    # collection scan + in-memory sort on every (cold) render.
+    try:
+        await db.db["products"].create_index("category_ids", name="product_category_ids")
+        await db.db["products"].create_index(
+            [("sort_order", 1), ("created_at", -1)],
+            name="product_sort_order_created",
+        )
+    except (DuplicateKeyError, OperationFailure) as e:
+        logging.warning("Product listing indexes: %s", e)
+
     print(f"\n\033[92m[SUCCESS]\033[0m Database connected: {settings.DATABASE_NAME}")
     logging.info(f"Connected to MongoDB: {settings.DATABASE_NAME}")
 

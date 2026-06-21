@@ -84,12 +84,13 @@ class ProductService:
             cursor = cursor.sort([("sort_order", 1), ("created_at", -1)])
         products = await cursor.to_list(length=100)
         active_chips_by_id = await self._fetch_active_chips_by_id()
-        normalized = []
+        # Read-only stock (no write-on-read), one bulk query for all set
+        # components (instead of N+1), then in-memory chip attachment. This
+        # replaces the previous serial per-product await loop.
         for product in products:
-            product = await self._ensure_stock_ml(product)
-            product = await self._enrich_set_items(product)
-            normalized.append(self._attach_chips(product, active_chips_by_id))
-        return normalized
+            self._ensure_stock_ml_readonly(product)
+        await self._enrich_set_items_bulk(products)
+        return [self._attach_chips(product, active_chips_by_id) for product in products]
 
     async def search(
         self,
@@ -489,6 +490,71 @@ class ProductService:
                 {"$set": {"stock_ml": computed}},
             )
         return product
+
+    def _ensure_stock_ml_readonly(self, product: Optional[dict]) -> Optional[dict]:
+        """In-memory variant of _ensure_stock_ml — never writes back to Mongo.
+
+        Used on read-heavy list paths (category grid, product listings) so a GET
+        can't trigger a write per product. The canonical single-product reads
+        still backfill the persisted value.
+        """
+        if not product:
+            return product
+        if product.get("product_type") == "set":
+            return product
+        if product.get("stock_ml") is None:
+            computed = 0
+            for v in product.get("variants", []) or []:
+                try:
+                    computed += int(v.get("size_ml", 0)) * int(v.get("stock", 0))
+                except Exception:
+                    continue
+            product["stock_ml"] = computed
+        return product
+
+    async def _enrich_set_items_bulk(self, products: List[dict]) -> None:
+        """Resolve set component display fields for many products in ONE query.
+
+        Equivalent to calling _enrich_set_items per product, but collapses the
+        N+1 component lookups into a single `$in` query for the whole page.
+        Mutates each set product's `set_items` in place.
+        """
+        set_products = [p for p in products if p.get("product_type") == "set"]
+        if not set_products:
+            return
+
+        all_oids: list[ObjectId] = []
+        seen: set[str] = set()
+        for product in set_products:
+            for item in product.get("set_items") or []:
+                pid = str(item.get("product_id") or "")
+                if ObjectId.is_valid(pid) and pid not in seen:
+                    seen.add(pid)
+                    all_oids.append(ObjectId(pid))
+
+        comps_by_id: dict[str, dict] = {}
+        if all_oids:
+            cursor = self.collection.find(
+                {"_id": {"$in": all_oids}},
+                {"name": 1, "brand": 1, "image_url": 1, "slug": 1, "stock_ml": 1},
+            )
+            found = await cursor.to_list(length=len(all_oids))
+            comps_by_id = {str(doc["_id"]): doc for doc in found}
+
+        for product in set_products:
+            enriched = []
+            for item in product.get("set_items") or []:
+                pid = str(item.get("product_id") or "")
+                comp = comps_by_id.get(pid) if ObjectId.is_valid(pid) else None
+                enriched.append({
+                    "product_id": pid,
+                    "name": comp.get("name") if comp else item.get("name", ""),
+                    "brand": comp.get("brand") if comp else item.get("brand", ""),
+                    "image_url": comp.get("image_url") if comp else item.get("image_url"),
+                    "slug": comp.get("slug") if comp else item.get("slug"),
+                    "stock_ml": int(comp.get("stock_ml") or 0) if comp else 0,
+                })
+            product["set_items"] = enriched
 
     async def _fetch_active_chips_by_id(self) -> dict:
         """Build a single dict of active chips keyed by their string id.
