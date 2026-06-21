@@ -50,8 +50,52 @@ def ensure_editor_js_root(blocks: dict[str, Any]) -> None:
         raise HTTPException(status_code=400, detail="blocks.blocks must be an array")
 
 
+# Inline formatting allowed inside Editor.js text fields. Kept in sync with the
+# admin editor's ParagraphWithLinks sanitizer and the storefront's
+# sanitizeBlogInlineHtml renderer so inline links/emphasis survive a save round
+# trip instead of being escaped into visible markup.
+_INLINE_TAGS: frozenset[str] = frozenset(
+    {"a", "b", "strong", "i", "em", "u", "mark", "span", "br"}
+)
+_INLINE_ATTRS: dict[str, set[str]] = {
+    "a": {"href", "target", "rel", "class"},
+    "span": {"class"},
+}
+
+
+def clean_inline(text: str) -> str:
+    """Allowlist inline formatting (links, emphasis) in a block text field.
+
+    Unlike nh3.clean_text (which escapes ALL markup to visible text), this keeps
+    a small set of safe inline tags so author-added links render as links.
+    """
+    return nh3.clean(
+        text,
+        tags=set(_INLINE_TAGS),
+        attributes={k: set(v) for k, v in _INLINE_ATTRS.items()},
+        url_schemes={"http", "https", "mailto", "tel"},
+        link_rel="noopener noreferrer",
+    )
+
+
+def _clean_list_item(item: Any) -> Any:
+    """Clean a list item: a flat string, or a nested {content, items} node."""
+    if isinstance(item, str):
+        return clean_inline(item)
+    if isinstance(item, dict):
+        node = dict(item)
+        content = node.get("content")
+        if isinstance(content, str):
+            node["content"] = clean_inline(content)
+        sub = node.get("items")
+        if isinstance(sub, list):
+            node["items"] = [_clean_list_item(s) for s in sub]
+        return node
+    return item
+
+
 def sanitize_blocks_inplace(blocks: dict[str, Any]) -> dict[str, Any]:
-    """Strip markup from Editor.js text fields (community + admin blocks)."""
+    """Allowlist inline markup in Editor.js text fields (community + admin blocks)."""
     out = dict(blocks)
     bl: list[Any] = list(out.get("blocks") or [])
     for block in bl:
@@ -64,22 +108,20 @@ def sanitize_blocks_inplace(blocks: dict[str, Any]) -> dict[str, Any]:
         if t == "paragraph":
             text = data.get("text")
             if isinstance(text, str):
-                data["text"] = nh3.clean_text(text)
+                data["text"] = clean_inline(text)
         elif t == "header":
             tx = data.get("text")
             if isinstance(tx, str):
-                data["text"] = nh3.clean_text(tx)
+                data["text"] = clean_inline(tx)
         elif t == "quote":
             for k in ("text", "caption"):
                 v = data.get(k)
                 if isinstance(v, str):
-                    data[k] = nh3.clean_text(v)
+                    data[k] = clean_inline(v)
         elif t == "list":
             items = data.get("items")
             if isinstance(items, list):
-                data["items"] = [
-                    nh3.clean_text(i) if isinstance(i, str) else i for i in items
-                ]
+                data["items"] = [_clean_list_item(i) for i in items]
         elif t == "product":
             pid = data.get("product_id") or data.get("productId")
             if isinstance(pid, str):
