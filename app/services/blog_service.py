@@ -57,8 +57,10 @@ def ensure_editor_js_root(blocks: dict[str, Any]) -> None:
 _INLINE_TAGS: frozenset[str] = frozenset(
     {"a", "b", "strong", "i", "em", "u", "mark", "span", "br"}
 )
+# NOTE: do not include "rel" for <a> here. nh3 manages the rel attribute via
+# `link_rel` below and raises ValueError if both are set at once.
 _INLINE_ATTRS: dict[str, set[str]] = {
-    "a": {"href", "target", "rel", "class"},
+    "a": {"href", "target", "class"},
     "span": {"class"},
 }
 
