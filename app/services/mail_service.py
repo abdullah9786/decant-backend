@@ -90,6 +90,19 @@ class MailService:
         cod_fee = float(order.get("cod_fee") or 0)
         total_amount = order.get("total_amount", 0)
 
+        mystery_gift = order.get("mystery_gift") or {}
+        mystery_block = ""
+        if mystery_gift.get("name"):
+            accent = mystery_gift.get("accent_color") or "#7c3aed"
+            tagline = mystery_gift.get("tagline") or "A free surprise ships with your order."
+            mystery_block = f"""
+            <div style="margin: 20px 0; padding: 16px; background: {accent}14; border: 1px solid {accent}55; border-radius: 8px;">
+                <p style="margin: 0; font-size: 11px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.1em; color: {accent};">Mystery Gift Unlocked</p>
+                <p style="margin: 6px 0 2px; font-size: 16px; font-weight: bold; color: #022c22;">&#127873; {mystery_gift['name']}</p>
+                <p style="margin: 0; font-size: 13px; color: #374151;">{tagline}</p>
+            </div>
+            """
+
         if is_cod:
             subject = "Order Confirmed (Cash on Delivery) — DECUME"
             intro = (
@@ -141,6 +154,8 @@ class MailService:
                     <tr><td colspan="2" style="padding: 20px 10px 10px; font-weight: bold; text-align: right;">{grand_total_label}:</td><td style="padding: 20px 10px 10px; font-weight: bold; text-align: right; color: #059669;">₹{total_amount}</td></tr>
                 </tfoot>
             </table>
+
+            {mystery_block}
 
             <div style="margin: 20px 0; padding: 15px; background: #f9fafb; border-radius: 5px;">
                 <p style="margin: 0; font-size: 11px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.1em; color: #6b7280;">Shipping To</p>
@@ -220,6 +235,13 @@ class MailService:
             if is_cod
             else "<span style=\"display: inline-block; background: #dbeafe; color: #1e3a8a; padding: 4px 10px; font-size: 11px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.1em; border-radius: 3px;\">Prepaid</span>"
         )
+        mystery_gift = order.get("mystery_gift") or {}
+        mystery_line = (
+            f"<p><strong>Mystery Gift:</strong> &#127873; {mystery_gift['name']} "
+            f"(pack offline)</p>"
+            if mystery_gift.get("name")
+            else ""
+        )
         html_body = f"""
         <div style="font-family: sans-serif; color: #1e293b; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0;">
             <h2 style="color: #020617;">New Order Received</h2>
@@ -227,6 +249,7 @@ class MailService:
             <p><strong>Customer:</strong> {order.get('customer_name')}</p>
             <p><strong>Amount:</strong> ₹{order['total_amount']}{' (collect at delivery)' if is_cod else ''}</p>
             <p><strong>Order ID:</strong> {str(order.get('_id', ''))}</p>
+            {mystery_line}
             <div style="margin: 20px 0;">
                 <a href="{settings.APP_BASE_URL.replace('3000', '3001')}/orders" style="background-color: #4f46e5; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; font-weight: bold;">Manage in Admin Panel</a>
             </div>

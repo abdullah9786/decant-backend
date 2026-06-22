@@ -58,6 +58,37 @@ class OfferService:
         """
         return await self.get_active_by_type("daily_deal")
 
+    async def get_active_mystery_gift(self):
+        """The single active mystery-gift offer (or `None`)."""
+        return await self.get_active_by_type("mystery_gift")
+
+    @staticmethod
+    def resolve_mystery_tier(config: Optional[dict], subtotal: float) -> Optional[dict]:
+        """Return the highest mystery-gift tier unlocked by `subtotal`, or None.
+
+        Tiers are matched by `min_subtotal`; the customer is granted the single
+        richest tier whose threshold the cart subtotal meets or exceeds. Tiers
+        with non-numeric thresholds are ignored so a malformed admin entry can't
+        crash order creation.
+        """
+        if not config:
+            return None
+        tiers = config.get("tiers") or []
+        unlocked: list[tuple[float, dict]] = []
+        for tier in tiers:
+            if not isinstance(tier, dict):
+                continue
+            try:
+                threshold = float(tier.get("min_subtotal"))
+            except (TypeError, ValueError):
+                continue
+            if subtotal >= threshold:
+                unlocked.append((threshold, tier))
+        if not unlocked:
+            return None
+        unlocked.sort(key=lambda pair: pair[0])
+        return unlocked[-1][1]
+
     async def is_product_in_active_deal(self, product_id: str) -> bool:
         deal = await self.get_active_daily_deal()
         if not deal:

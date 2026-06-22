@@ -64,10 +64,44 @@ class OrderService:
             print(f"[RAZORPAY-REFUND] refund.create() failed: {refund_err}")
             raise
 
+    async def _resolve_mystery_gift(self, items: List[dict]) -> dict | None:
+        """Derive the unlocked mystery-gift tier from the cart subtotal.
+
+        Server-authoritative so the client can't claim a richer tier than the
+        cart earns. The subtotal mirrors the storefront cart total exactly
+        (sum of price * quantity over all non-cancelled lines). Returns a
+        self-contained snapshot so order history stays correct even if the
+        offer is later edited or deactivated. Fulfillment is offline, so no
+        stock or product mapping is involved.
+        """
+        offer_service = OfferService(self.products.database)
+        offer = await offer_service.get_active_mystery_gift()
+        if not offer:
+            return None
+        subtotal = sum(
+            float(it.get("price", 0)) * int(it.get("quantity", 0))
+            for it in (items or [])
+            if it.get("status") != "cancelled"
+        )
+        tier = OfferService.resolve_mystery_tier(offer.get("config") or {}, subtotal)
+        if not tier:
+            return None
+        return {
+            "offer_id": str(offer.get("_id")),
+            "tier_id": tier.get("id"),
+            "name": tier.get("name"),
+            "min_subtotal": tier.get("min_subtotal"),
+            "accent_color": tier.get("accent_color"),
+            "icon": tier.get("icon"),
+            "tagline": tier.get("tagline"),
+            "subtotal_at_unlock": round(subtotal, 2),
+        }
+
     async def create(self, order_in: OrderCreate):
         order_dict = order_in.dict()
         order_dict["created_at"] = order_dict.get("created_at") or datetime.now(timezone.utc)
         await self._ensure_stock(order_dict.get("items", []))
+        order_dict["mystery_gift"] = await self._resolve_mystery_gift(order_dict.get("items", []))
         free_decants = order_dict.get("free_decants") or []
         if free_decants:
             try:

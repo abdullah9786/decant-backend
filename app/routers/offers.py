@@ -140,6 +140,48 @@ async def _reject_overlapping_daily_deal(
         )
 
 
+def _validate_mystery_gift_offer(offer_type: str | None, config: dict | None) -> None:
+    """Reject malformed mystery-gift tiers so the storefront ladder and
+    server-side tier resolution always have clean data to work with.
+    """
+    if offer_type != "mystery_gift":
+        return
+    tiers = (config or {}).get("tiers")
+    if not isinstance(tiers, list) or not tiers:
+        raise HTTPException(
+            status_code=400,
+            detail="A mystery gift offer needs at least one tier.",
+        )
+    seen_ids: set[str] = set()
+    for idx, tier in enumerate(tiers):
+        if not isinstance(tier, dict):
+            raise HTTPException(status_code=400, detail=f"Tier {idx + 1} is invalid.")
+        name = (tier.get("name") or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail=f"Tier {idx + 1} needs a name.")
+        try:
+            threshold = float(tier.get("min_subtotal"))
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Tier '{name}' needs a numeric unlock amount.",
+            )
+        if threshold <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Tier '{name}' unlock amount must be greater than 0.",
+            )
+        tier_id = (tier.get("id") or "").strip()
+        if not tier_id:
+            raise HTTPException(status_code=400, detail=f"Tier '{name}' is missing an id.")
+        if tier_id in seen_ids:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Duplicate tier id '{tier_id}'.",
+            )
+        seen_ids.add(tier_id)
+
+
 @router.post("", response_model=OfferOut, status_code=status.HTTP_201_CREATED)
 async def create_offer(offer_in: OfferCreate, db=Depends(get_database), _admin=Depends(require_admin)):
     service = OfferService(db)
@@ -150,6 +192,7 @@ async def create_offer(offer_in: OfferCreate, db=Depends(get_database), _admin=D
         offer_in.ends_at,
         offer_in.is_active,
     )
+    _validate_mystery_gift_offer(offer_in.type, offer_in.config)
     created = await service.create(offer_in)
     ids = _daily_deal_product_ids(created)
     await revalidate_daily_deal(ids, extra_paths=await _daily_deal_pdp_slug_paths(db, ids))
@@ -176,6 +219,9 @@ async def update_offer(id: str, offer_in: OfferUpdate, db=Depends(get_database),
         merged_active,
         exclude_id=id,
     )
+    if merged_type == "mystery_gift":
+        merged_config = offer_in.config if offer_in.config is not None else current.get("config")
+        _validate_mystery_gift_offer(merged_type, merged_config)
     updated = await service.update(id, offer_in)
     ids = _daily_deal_product_ids(updated)
     await revalidate_daily_deal(ids, extra_paths=await _daily_deal_pdp_slug_paths(db, ids))

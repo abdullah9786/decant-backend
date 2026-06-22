@@ -78,6 +78,7 @@ class OrderBase(BaseModel):
     discount_amount: Optional[float] = None
     free_decants: Optional[List[FreeDecantItem]] = None
     free_decants_dropped_reason: Optional[str] = None
+    mystery_gift: Optional[Dict[str, Any]] = None
     payment_method: Literal["prepaid", "cod"] = "prepaid"
     cod_fee: Optional[float] = None
     idempotency_key: Optional[str] = None
@@ -115,6 +116,7 @@ class OrderTrackOut(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     free_decants: Optional[List[FreeDecantItem]] = None
     free_decants_dropped_reason: Optional[str] = None
+    mystery_gift: Optional[Dict[str, Any]] = None
     cancelled_at: Optional[datetime] = None
     cancelled_by: Optional[str] = None
     cancellation_reason: Optional[str] = None
