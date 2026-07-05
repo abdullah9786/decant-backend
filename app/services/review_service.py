@@ -306,6 +306,53 @@ class ReviewService:
         product = await self.db["products"].find_one({"_id": ObjectId(product_id)})
         await revalidate_product_reviews(product_id, (product or {}).get("slug"))
 
+    async def _revalidate_for_product_id(self, product_id: str) -> None:
+        product = await self.db["products"].find_one({"_id": ObjectId(product_id)})
+        await revalidate_product_reviews(product_id, (product or {}).get("slug"))
+
+    def _parse_review_object_ids(self, review_ids: List[str]) -> List[ObjectId]:
+        seen: List[ObjectId] = []
+        for rid in review_ids:
+            if not ObjectId.is_valid(rid):
+                raise HTTPException(status_code=400, detail=f"Invalid review id: {rid}")
+            oid = ObjectId(rid)
+            if oid not in seen:
+                seen.append(oid)
+        if not seen:
+            raise HTTPException(status_code=400, detail="No review ids provided")
+        return seen
+
+    async def bulk_update_published(self, review_ids: List[str], is_published: bool) -> dict:
+        oids = self._parse_review_object_ids(review_ids)
+        docs = await self.collection.find({"_id": {"$in": oids}}).to_list(length=len(oids))
+        if not docs:
+            raise HTTPException(status_code=404, detail="No matching reviews found")
+
+        result = await self.collection.update_many(
+            {"_id": {"$in": oids}},
+            {"$set": {"is_published": is_published}},
+        )
+
+        product_ids = {doc["product_id"] for doc in docs if doc.get("product_id")}
+        for product_id in product_ids:
+            await self._revalidate_for_product_id(product_id)
+
+        return {"updated_count": result.modified_count, "matched_count": result.matched_count}
+
+    async def bulk_delete(self, review_ids: List[str]) -> dict:
+        oids = self._parse_review_object_ids(review_ids)
+        docs = await self.collection.find({"_id": {"$in": oids}}).to_list(length=len(oids))
+        if not docs:
+            raise HTTPException(status_code=404, detail="No matching reviews found")
+
+        result = await self.collection.delete_many({"_id": {"$in": oids}})
+
+        product_ids = {doc["product_id"] for doc in docs if doc.get("product_id")}
+        for product_id in product_ids:
+            await self._revalidate_for_product_id(product_id)
+
+        return {"deleted_count": result.deleted_count}
+
     async def update_admin(self, review_id: str, patch: ReviewUpdate) -> dict:
         if not ObjectId.is_valid(review_id):
             raise HTTPException(status_code=400, detail="Invalid review id")

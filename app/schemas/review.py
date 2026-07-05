@@ -33,6 +33,15 @@ class ReviewUpdate(BaseModel):
     user_name: Optional[str] = Field(None, min_length=1, max_length=80)
 
 
+class ReviewBulkIds(BaseModel):
+    review_ids: List[str] = Field(..., min_length=1, max_length=200)
+
+
+class ReviewBulkPublish(BaseModel):
+    review_ids: List[str] = Field(..., min_length=1, max_length=200)
+    is_published: bool
+
+
 class ReviewOut(BaseModel):
     id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
     product_id: str

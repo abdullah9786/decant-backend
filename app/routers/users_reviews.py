@@ -10,6 +10,8 @@ from app.schemas.review import (
     ReviewEligibility,
     AdminReviewBulkCreate,
     ReviewUpdate,
+    ReviewBulkIds,
+    ReviewBulkPublish,
 )
 from app.services.user_service import UserService
 from app.services.review_service import ReviewService
@@ -122,6 +124,26 @@ async def bulk_create_reviews_admin(
 ):
     review_service = ReviewService(db)
     return await review_service.bulk_create_admin(payload)
+
+
+@review_router.patch("/admin/bulk-publish")
+async def bulk_publish_reviews_admin(
+    body: ReviewBulkPublish,
+    db=Depends(get_database),
+    _admin=Depends(require_admin),
+):
+    review_service = ReviewService(db)
+    return await review_service.bulk_update_published(body.review_ids, body.is_published)
+
+
+@review_router.post("/admin/bulk-delete")
+async def bulk_delete_reviews_admin(
+    body: ReviewBulkIds,
+    db=Depends(get_database),
+    _admin=Depends(require_admin),
+):
+    review_service = ReviewService(db)
+    return await review_service.bulk_delete(body.review_ids)
 
 
 @review_router.patch("/{review_id}", response_model=ReviewAdminOut)
