@@ -322,14 +322,25 @@ class ReviewService:
             raise HTTPException(status_code=400, detail="No review ids provided")
         return seen
 
-    async def bulk_update_published(self, review_ids: List[str], is_published: bool) -> dict:
+    def _review_ids_query(self, review_ids: List[str]) -> dict:
+        """Match Mongo _id stored as ObjectId or legacy string."""
         oids = self._parse_review_object_ids(review_ids)
-        docs = await self.collection.find({"_id": {"$in": oids}}).to_list(length=len(oids))
+        str_ids = [str(oid) for oid in oids]
+        return {
+            "$or": [
+                {"_id": {"$in": oids}},
+                {"_id": {"$in": str_ids}},
+            ],
+        }
+
+    async def bulk_update_published(self, review_ids: List[str], is_published: bool) -> dict:
+        query = self._review_ids_query(review_ids)
+        docs = await self.collection.find(query).to_list(length=len(review_ids))
         if not docs:
             raise HTTPException(status_code=404, detail="No matching reviews found")
 
         result = await self.collection.update_many(
-            {"_id": {"$in": oids}},
+            query,
             {"$set": {"is_published": is_published}},
         )
 
@@ -340,12 +351,12 @@ class ReviewService:
         return {"updated_count": result.modified_count, "matched_count": result.matched_count}
 
     async def bulk_delete(self, review_ids: List[str]) -> dict:
-        oids = self._parse_review_object_ids(review_ids)
-        docs = await self.collection.find({"_id": {"$in": oids}}).to_list(length=len(oids))
+        query = self._review_ids_query(review_ids)
+        docs = await self.collection.find(query).to_list(length=len(review_ids))
         if not docs:
             raise HTTPException(status_code=404, detail="No matching reviews found")
 
-        result = await self.collection.delete_many({"_id": {"$in": oids}})
+        result = await self.collection.delete_many(query)
 
         product_ids = {doc["product_id"] for doc in docs if doc.get("product_id")}
         for product_id in product_ids:
