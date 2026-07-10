@@ -190,6 +190,57 @@ class OrderService:
         order_total = round(float(rows[0]["order_total"]), 2) if rows else 0.0
         return {"order_count": order_count, "order_total": order_total}
 
+    async def bulk_stats_for_users(self, users: list[dict]) -> dict[str, dict]:
+        """Compute order stats for many users in one filtered orders scan."""
+        if not users:
+            return {}
+
+        stats: dict[str, dict] = {}
+        uid_set: set[str] = set()
+        email_to_uid: dict[str, str] = {}
+
+        for user in users:
+            uid = str(user["_id"])
+            uid_set.add(uid)
+            stats[uid] = {"order_count": 0, "order_total": 0.0}
+            email = (user.get("email") or "").strip().lower()
+            if email:
+                email_to_uid[email] = uid
+
+        or_clauses: list[dict] = [{"user_id": {"$in": list(uid_set)}}]
+        if email_to_uid:
+            or_clauses.append({
+                "$expr": {
+                    "$in": [
+                        {"$toLower": {"$ifNull": ["$customer_email", ""]}},
+                        list(email_to_uid.keys()),
+                    ]
+                }
+            })
+        query = {"$or": or_clauses} if len(or_clauses) > 1 else or_clauses[0]
+
+        cursor = self.collection.find(
+            query,
+            projection={"user_id": 1, "customer_email": 1, "status": 1, "total_amount": 1},
+        )
+        async for order in cursor:
+            user_id = str(order.get("user_id") or "")
+            email_key = (order.get("customer_email") or "").strip().lower()
+            targets: set[str] = set()
+            if user_id in uid_set:
+                targets.add(user_id)
+            matched_uid = email_to_uid.get(email_key)
+            if matched_uid:
+                targets.add(matched_uid)
+            for uid in targets:
+                stats[uid]["order_count"] += 1
+                if order.get("status") != "cancelled":
+                    stats[uid]["order_total"] += float(order.get("total_amount") or 0)
+
+        for uid in stats:
+            stats[uid]["order_total"] = round(stats[uid]["order_total"], 2)
+        return stats
+
     async def get_for_user(self, user_id: str, email: Optional[str] = None, limit: int = 500):
         """Orders linked by account id and matching checkout email."""
         query = self._orders_query_for_user(user_id, email)

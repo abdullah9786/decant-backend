@@ -69,6 +69,12 @@ async def connect_to_mongo():
             e,
         )
 
+    try:
+        await db.db["orders"].create_index("user_id", name="orders_user_id")
+        await db.db["orders"].create_index("customer_email", name="orders_customer_email")
+    except (DuplicateKeyError, OperationFailure) as e:
+        logging.warning("Order user lookup indexes: %s", e)
+
     # Blog: moderation queue + author listing + unique published slugs
     try:
         await db.db["blog_posts"].create_index(

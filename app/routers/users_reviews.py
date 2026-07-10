@@ -45,11 +45,12 @@ async def get_users(db=Depends(get_database), _admin=Depends(require_admin)):
     user_service = UserService(db)
     order_service = OrderService(db)
     users = await user_service.get_all()
+    bulk_stats = await order_service.bulk_stats_for_users(users)
 
     enriched = []
     for user in users:
         uid = str(user["_id"])
-        stats = await order_service.stats_for_user(uid, user.get("email"))
+        stats = bulk_stats.get(uid, {"order_count": 0, "order_total": 0.0})
         enriched.append({
             **user,
             "order_count": stats["order_count"],
