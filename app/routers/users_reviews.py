@@ -1,7 +1,9 @@
 from fastapi import APIRouter, Depends, status, HTTPException, Query
 from typing import List, Optional
+from datetime import datetime
 
 from app.schemas.user import UserOut, UserCreate
+from app.schemas.order import OrderOut
 from app.schemas.review import (
     ReviewCreate,
     ReviewOut,
@@ -15,8 +17,24 @@ from app.schemas.review import (
 )
 from app.services.user_service import UserService
 from app.services.review_service import ReviewService
+from app.services.order_service import OrderService
 from app.db.mongodb import get_database
 from app.utils.deps import get_current_user, require_admin
+
+from pydantic import BaseModel
+
+
+class UserOrderStats(BaseModel):
+    total_orders: int = 0
+    total_spent: float = 0
+    last_order_at: Optional[datetime] = None
+
+
+class UserOrdersResponse(BaseModel):
+    user: UserOut
+    orders: List[OrderOut]
+    stats: UserOrderStats
+
 
 user_router = APIRouter(prefix="/users", tags=["users"])
 review_router = APIRouter(prefix="/reviews", tags=["reviews"])
@@ -32,6 +50,31 @@ async def get_users(db=Depends(get_database), _admin=Depends(require_admin)):
 async def create_admin(user_in: UserCreate, db=Depends(get_database), _admin=Depends(require_admin)):
     user_service = UserService(db)
     return await user_service.create_admin(user_in.dict())
+
+
+@user_router.get("/{id}/orders", response_model=UserOrdersResponse)
+async def get_user_orders(id: str, db=Depends(get_database), _admin=Depends(require_admin)):
+    user_service = UserService(db)
+    user = await user_service.get_by_id(id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    order_service = OrderService(db)
+    orders = await order_service.get_for_user(str(user["_id"]), user.get("email"))
+
+    active = [o for o in orders if o.get("status") != "cancelled"]
+    total_spent = sum(float(o.get("total_amount") or 0) for o in active)
+    last_order_at = orders[0].get("created_at") if orders else None
+
+    return {
+        "user": user,
+        "orders": orders,
+        "stats": {
+            "total_orders": len(orders),
+            "total_spent": round(total_spent, 2),
+            "last_order_at": last_order_at,
+        },
+    }
 
 
 @user_router.get("/{id}", response_model=UserOut)

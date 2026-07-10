@@ -2,8 +2,9 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from pymongo.errors import DuplicateKeyError
 from app.schemas.order import OrderCreate, OrderUpdate
 from bson import ObjectId
-from typing import List
+from typing import List, Optional
 from datetime import datetime, timezone
+import re
 import razorpay
 from app.config.config import settings
 from app.services.mail_service import MailService
@@ -153,6 +154,20 @@ class OrderService:
             query["user_id"] = user_id
         cursor = self.collection.find(query).sort("created_at", -1)
         return await cursor.to_list(length=100)
+
+    async def get_for_user(self, user_id: str, email: Optional[str] = None, limit: int = 200):
+        """Orders linked by account id and matching guest-checkout email."""
+        or_clauses: list[dict] = [{"user_id": user_id}]
+        if email and email.strip():
+            or_clauses.append({
+                "customer_email": {
+                    "$regex": f"^{re.escape(email.strip())}$",
+                    "$options": "i",
+                }
+            })
+        query = {"$or": or_clauses} if len(or_clauses) > 1 else or_clauses[0]
+        cursor = self.collection.find(query).sort("created_at", -1)
+        return await cursor.to_list(length=limit)
 
     async def get_by_id(self, order_id: str):
         return await self.collection.find_one({"_id": ObjectId(order_id)})
