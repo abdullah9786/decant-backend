@@ -59,3 +59,8 @@ class UserOut(UserBase):
     class Config:
         populate_by_name = True
         json_encoders = {ObjectId: str}
+
+
+class UserListOut(UserOut):
+    order_count: int = 0
+    order_total: float = 0

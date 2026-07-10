@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, status, HTTPException, Query
 from typing import List, Optional
 from datetime import datetime
 
-from app.schemas.user import UserOut, UserCreate
+from app.schemas.user import UserOut, UserCreate, UserListOut
 from app.schemas.order import OrderOut
 from app.schemas.review import (
     ReviewCreate,
@@ -40,10 +40,22 @@ user_router = APIRouter(prefix="/users", tags=["users"])
 review_router = APIRouter(prefix="/reviews", tags=["reviews"])
 
 
-@user_router.get("", response_model=List[UserOut])
+@user_router.get("", response_model=List[UserListOut])
 async def get_users(db=Depends(get_database), _admin=Depends(require_admin)):
     user_service = UserService(db)
-    return await user_service.get_all()
+    order_service = OrderService(db)
+    users = await user_service.get_all()
+
+    enriched = []
+    for user in users:
+        uid = str(user["_id"])
+        stats = await order_service.stats_for_user(uid, user.get("email"))
+        enriched.append({
+            **user,
+            "order_count": stats["order_count"],
+            "order_total": stats["order_total"],
+        })
+    return enriched
 
 
 @user_router.post("/create-admin", response_model=UserOut, status_code=status.HTTP_201_CREATED)
@@ -61,17 +73,15 @@ async def get_user_orders(id: str, db=Depends(get_database), _admin=Depends(requ
 
     order_service = OrderService(db)
     orders = await order_service.get_for_user(str(user["_id"]), user.get("email"))
-
-    active = [o for o in orders if o.get("status") != "cancelled"]
-    total_spent = sum(float(o.get("total_amount") or 0) for o in active)
+    stats = await order_service.stats_for_user(str(user["_id"]), user.get("email"))
     last_order_at = orders[0].get("created_at") if orders else None
 
     return {
         "user": user,
         "orders": orders,
         "stats": {
-            "total_orders": len(orders),
-            "total_spent": round(total_spent, 2),
+            "total_orders": stats["order_count"],
+            "total_spent": stats["order_total"],
             "last_order_at": last_order_at,
         },
     }

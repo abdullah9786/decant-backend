@@ -155,8 +155,7 @@ class OrderService:
         cursor = self.collection.find(query).sort("created_at", -1)
         return await cursor.to_list(length=100)
 
-    async def get_for_user(self, user_id: str, email: Optional[str] = None, limit: int = 200):
-        """Orders linked by account id and matching guest-checkout email."""
+    def _orders_query_for_user(self, user_id: str, email: Optional[str] = None) -> dict:
         or_clauses: list[dict] = [{"user_id": user_id}]
         if email and email.strip():
             or_clauses.append({
@@ -165,7 +164,35 @@ class OrderService:
                     "$options": "i",
                 }
             })
-        query = {"$or": or_clauses} if len(or_clauses) > 1 else or_clauses[0]
+        return {"$or": or_clauses} if len(or_clauses) > 1 else or_clauses[0]
+
+    async def stats_for_user(self, user_id: str, email: Optional[str] = None) -> dict:
+        """Order count/total using the same rules as get_for_user."""
+        query = self._orders_query_for_user(user_id, email)
+        order_count = await self.collection.count_documents(query)
+        rows = await self.collection.aggregate([
+            {"$match": query},
+            {
+                "$group": {
+                    "_id": None,
+                    "order_total": {
+                        "$sum": {
+                            "$cond": [
+                                {"$ne": ["$status", "cancelled"]},
+                                "$total_amount",
+                                0,
+                            ]
+                        }
+                    },
+                }
+            },
+        ]).to_list(length=1)
+        order_total = round(float(rows[0]["order_total"]), 2) if rows else 0.0
+        return {"order_count": order_count, "order_total": order_total}
+
+    async def get_for_user(self, user_id: str, email: Optional[str] = None, limit: int = 500):
+        """Orders linked by account id and matching checkout email."""
+        query = self._orders_query_for_user(user_id, email)
         cursor = self.collection.find(query).sort("created_at", -1)
         return await cursor.to_list(length=limit)
 
