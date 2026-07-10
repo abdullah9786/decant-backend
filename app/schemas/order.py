@@ -82,6 +82,8 @@ class OrderBase(BaseModel):
     payment_method: Literal["prepaid", "cod"] = "prepaid"
     cod_fee: Optional[float] = None
     idempotency_key: Optional[str] = None
+    instagram_packing_opt_in: bool = False
+    instagram_username: Optional[str] = None
 
 class OrderCreate(OrderBase):
     pass

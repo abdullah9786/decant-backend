@@ -151,7 +151,7 @@ class OrderService:
         query = {}
         if user_id:
             query["user_id"] = user_id
-        cursor = self.collection.find(query)
+        cursor = self.collection.find(query).sort("created_at", -1)
         return await cursor.to_list(length=100)
 
     async def get_by_id(self, order_id: str):
