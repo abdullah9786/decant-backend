@@ -169,6 +169,47 @@ class MailService:
         """
         return await self._send_email(email, customer_name, subject, html_body)
 
+    async def send_shipped_notification(
+        self,
+        email: str,
+        customer_name: str,
+        order_id: str,
+        order: Dict[str, Any],
+    ):
+        full_id = str(order_id)
+        decume_track = f"{settings.APP_BASE_URL}/track-order?orderId={full_id}"
+        tracking_id = (order.get("tracking_id") or "").strip()
+        tracking_url = (order.get("tracking_url") or "").strip()
+        courier_name = (order.get("courier_name") or "").strip()
+
+        tracking_lines = ""
+        if courier_name:
+            tracking_lines += f'<p style="margin: 0 0 8px; font-size: 14px; color: #374151;"><strong>Courier:</strong> {courier_name}</p>'
+        if tracking_id:
+            tracking_lines += f'<p style="margin: 0 0 8px; font-size: 14px; color: #374151;"><strong>Tracking ID:</strong> {tracking_id}</p>'
+
+        cta_href = tracking_url or decume_track
+        cta_label = "Track on courier site" if tracking_url else "Track order"
+
+        subject = "Your DECUME order has shipped"
+        html_body = f"""
+        <div style="font-family: serif; color: #022c22; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #f0fdf4;">
+            <h2 style="text-transform: uppercase; letter-spacing: 0.2em; border-bottom: 2px solid #059669; padding-bottom: 10px;">Order Shipped</h2>
+            <p>Hi {customer_name},</p>
+            <p>Good news — your order is on its way. Use the details below to follow your parcel.</p>
+            <div style="margin: 20px 0; padding: 15px; background: #f9fafb; border-radius: 5px;">
+                <p style="margin: 0; font-size: 11px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.1em; color: #6b7280;">Order ID</p>
+                <p style="margin: 4px 0 12px; font-size: 14px; font-weight: bold; color: #022c22; word-break: break-all;">{full_id}</p>
+                {tracking_lines}
+            </div>
+            <div style="margin: 30px 0;">
+                <a href="{cta_href}" style="background-color: #022c22; color: white; padding: 12px 25px; text-decoration: none; font-weight: bold; text-transform: uppercase; letter-spacing: 0.1em; border-radius: 5px;">{cta_label}</a>
+            </div>
+            <p style="font-size: 12px; color: #6b7280;">You can also track anytime at <a href="{decume_track}" style="color: #059669;">decume.in/track-order</a>.</p>
+        </div>
+        """
+        return await self._send_email(email, customer_name, subject, html_body)
+
     async def send_delivery_notification(self, email: str, customer_name: str, order_id: str):
         subject = "Fragrance Delivered: Enjoy your Scent Ritual"
         full_id = str(order_id)

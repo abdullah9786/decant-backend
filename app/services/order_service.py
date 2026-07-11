@@ -271,26 +271,58 @@ class OrderService:
         return await self.collection.find_one({"_id": ObjectId(order_id)})
 
     async def update(self, order_id: str, order_in: OrderUpdate):
-        # Detect status change for email
         old_order = await self.get_by_id(order_id)
-        
+        if not old_order:
+            return None
+
         update_data = {k: v for k, v in order_in.dict(exclude_unset=True).items()}
+
+        tracking_touched = "tracking_id" in update_data or "tracking_url" in update_data
+        if tracking_touched:
+            next_id = update_data.get("tracking_id", old_order.get("tracking_id"))
+            next_url = update_data.get("tracking_url", old_order.get("tracking_url"))
+            if (next_id or next_url) and not old_order.get("shipped_at"):
+                update_data["shipped_at"] = datetime.now(timezone.utc)
+
         await self.collection.update_one(
             {"_id": ObjectId(order_id)}, {"$set": update_data}
         )
-        
+
         updated_order = await self.get_by_id(order_id)
-        
-        # If status changed to delivered, send email
-        if updated_order and updated_order.get("status") == "delivered" and old_order.get("status") != "delivered":
-            await self.mail_service.send_delivery_notification(
-                updated_order.get("customer_email"),
-                updated_order.get("customer_name"),
-                order_id
+
+        if updated_order:
+            old_status = old_order.get("status", "")
+            new_status = updated_order.get("status", "")
+            old_has_tracking = bool(
+                (old_order.get("tracking_id") or "").strip()
+                or (old_order.get("tracking_url") or "").strip()
             )
-            promo_service = PromoSubmissionService(self.collection.database)
-            await promo_service.send_promo_invite_if_needed(updated_order, order_id)
-            
+            new_has_tracking = bool(
+                (updated_order.get("tracking_id") or "").strip()
+                or (updated_order.get("tracking_url") or "").strip()
+            )
+            tracking_newly_added = new_has_tracking and not old_has_tracking
+            status_to_shipped = new_status == "shipped" and old_status != "shipped"
+
+            if new_has_tracking and (status_to_shipped or tracking_newly_added):
+                email = updated_order.get("customer_email")
+                if email:
+                    await self.mail_service.send_shipped_notification(
+                        email,
+                        updated_order.get("customer_name") or "there",
+                        order_id,
+                        updated_order,
+                    )
+
+            if new_status == "delivered" and old_status != "delivered":
+                await self.mail_service.send_delivery_notification(
+                    updated_order.get("customer_email"),
+                    updated_order.get("customer_name"),
+                    order_id
+                )
+                promo_service = PromoSubmissionService(self.collection.database)
+                await promo_service.send_promo_invite_if_needed(updated_order, order_id)
+
         return updated_order
 
     async def restore_stock(self, items: List[dict]):

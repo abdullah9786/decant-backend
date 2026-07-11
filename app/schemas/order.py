@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Literal, Optional, Dict, Any
 from datetime import datetime, timezone
 from .user import PyObjectId
@@ -86,6 +86,10 @@ class OrderBase(BaseModel):
     instagram_username: Optional[str] = None
     instagram_promo_opt_in: bool = False
     instagram_promo_campaign_id: Optional[str] = None
+    tracking_id: Optional[str] = None
+    tracking_url: Optional[str] = None
+    courier_name: Optional[str] = None
+    shipped_at: Optional[datetime] = None
 
 class OrderCreate(OrderBase):
     pass
@@ -96,6 +100,26 @@ class OrderUpdate(BaseModel):
     items: Optional[List[OrderItem]] = None
     payment_details: Optional[Dict[str, Any]] = None
     customer_phone: Optional[str] = None
+    tracking_id: Optional[str] = None
+    tracking_url: Optional[str] = None
+    courier_name: Optional[str] = None
+
+    @field_validator("tracking_id", "tracking_url", "courier_name", mode="before")
+    @classmethod
+    def strip_optional_text(cls, v):
+        if v is None:
+            return None
+        if isinstance(v, str):
+            stripped = v.strip()
+            return stripped or None
+        return v
+
+    @field_validator("tracking_url")
+    @classmethod
+    def validate_tracking_url(cls, v: Optional[str]):
+        if v and not (v.startswith("http://") or v.startswith("https://")):
+            raise ValueError("tracking_url must start with http:// or https://")
+        return v
 
 class PromoSubmissionSummary(BaseModel):
     status: str
@@ -136,6 +160,10 @@ class OrderTrackOut(BaseModel):
     cancellation_reason: Optional[str] = None
     instagram_promo_opt_in: bool = False
     promo_submission: Optional[PromoSubmissionSummary] = None
+    tracking_id: Optional[str] = None
+    tracking_url: Optional[str] = None
+    courier_name: Optional[str] = None
+    shipped_at: Optional[datetime] = None
 
     class Config:
         populate_by_name = True
