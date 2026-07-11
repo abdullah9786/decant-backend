@@ -9,6 +9,7 @@ import razorpay
 from app.config.config import settings
 from app.services.mail_service import MailService
 from app.services.offer_service import OfferService
+from app.services.promo_submission_service import PromoSubmissionService
 
 class OrderService:
     def __init__(self, db: AsyncIOMotorDatabase):
@@ -103,6 +104,11 @@ class OrderService:
         order_dict["created_at"] = order_dict.get("created_at") or datetime.now(timezone.utc)
         await self._ensure_stock(order_dict.get("items", []))
         order_dict["mystery_gift"] = await self._resolve_mystery_gift(order_dict.get("items", []))
+        offer_service = OfferService(self.products.database)
+        promo = await offer_service.get_active_instagram_promo()
+        if promo:
+            order_dict["instagram_promo_opt_in"] = True
+            order_dict["instagram_promo_campaign_id"] = str(promo.get("_id"))
         free_decants = order_dict.get("free_decants") or []
         if free_decants:
             try:
@@ -148,12 +154,25 @@ class OrderService:
             await self._decrement_free_decant_stock(free_decants)
         return await self.collection.find_one({"_id": result.inserted_id})
 
+    async def _attach_promo_to_orders(self, orders: list) -> list:
+        if not orders:
+            return orders
+        order_ids = [str(o["_id"]) for o in orders]
+        promo_service = PromoSubmissionService(self.collection.database)
+        promo_map = await promo_service.bulk_by_order_ids(order_ids)
+        for order in orders:
+            summary = promo_service.to_summary(promo_map.get(str(order["_id"])))
+            if summary:
+                order["promo_submission"] = summary
+        return orders
+
     async def get_all(self, user_id: str = None):
         query = {}
         if user_id:
             query["user_id"] = user_id
         cursor = self.collection.find(query).sort("created_at", -1)
-        return await cursor.to_list(length=100)
+        orders = await cursor.to_list(length=100)
+        return await self._attach_promo_to_orders(orders)
 
     def _orders_query_for_user(self, user_id: str, email: Optional[str] = None) -> dict:
         or_clauses: list[dict] = [{"user_id": user_id}]
@@ -245,7 +264,8 @@ class OrderService:
         """Orders linked by account id and matching checkout email."""
         query = self._orders_query_for_user(user_id, email)
         cursor = self.collection.find(query).sort("created_at", -1)
-        return await cursor.to_list(length=limit)
+        orders = await cursor.to_list(length=limit)
+        return await self._attach_promo_to_orders(orders)
 
     async def get_by_id(self, order_id: str):
         return await self.collection.find_one({"_id": ObjectId(order_id)})
@@ -268,6 +288,8 @@ class OrderService:
                 updated_order.get("customer_name"),
                 order_id
             )
+            promo_service = PromoSubmissionService(self.collection.database)
+            await promo_service.send_promo_invite_if_needed(updated_order, order_id)
             
         return updated_order
 

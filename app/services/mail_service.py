@@ -256,3 +256,101 @@ class MailService:
         </div>
         """
         return await self._send_email(admin_email, "Admin", subject, html_body)
+
+    async def send_instagram_promo_invite(
+        self,
+        email: str,
+        customer_name: str,
+        order_id: str,
+        submission: Dict[str, Any],
+        config: Dict[str, Any],
+        display: Dict[str, Any],
+    ):
+        if not email:
+            return False
+        name = customer_name or "there"
+        promo_url = self._frontend_url(f"/instagram-promo?orderId={order_id}")
+        deadline = submission.get("deadline_at")
+        deadline_str = ""
+        if deadline:
+            if hasattr(deadline, "strftime"):
+                deadline_str = deadline.strftime("%d %b %Y")
+            else:
+                deadline_str = str(deadline)
+
+        mention = config.get("required_mention") or "@decume.in"
+        hashtags = ", ".join(config.get("required_hashtags") or ["#decume"])
+        min_followers = config.get("min_followers", 100)
+
+        subject = "Enter our Instagram promo — chance to win a free decant"
+        html_body = f"""
+        <div style="font-family: serif; color: #022c22; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #f0fdf4;">
+            <h2 style="text-transform: uppercase; letter-spacing: 0.2em; border-bottom: 2px solid #059669; padding-bottom: 10px;">Instagram Promo</h2>
+            <p>Hi {name},</p>
+            <p>Your order has been delivered. You opted in to our Instagram promo — submit a short video for a <strong>chance to win</strong> a free decant. Winners are selected by our team; submitting does not guarantee a prize.</p>
+            <div style="margin: 15px 0; padding: 15px; background: #f9fafb; border-radius: 5px;">
+                <p style="margin: 0; font-size: 11px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.1em; color: #6b7280;">Rules</p>
+                <ul style="margin: 8px 0 0; padding-left: 18px; font-size: 13px; color: #374151;">
+                    <li>Post from any public Instagram account (yours or a friend's)</li>
+                    <li>Account must be public with at least {min_followers} followers</li>
+                    <li>Tag {mention} and use {hashtags}</li>
+                    <li>Submit by: <strong>{deadline_str or 'see promo page'}</strong></li>
+                </ul>
+            </div>
+            <p style="font-size: 13px; color: #374151;">If you win, the free decant ships to your order address — not to the Instagram poster.</p>
+            <div style="margin: 30px 0;">
+                <a href="{promo_url}" style="background-color: #022c22; color: white; padding: 12px 25px; text-decoration: none; font-weight: bold; text-transform: uppercase; letter-spacing: 0.1em; border-radius: 5px;">Submit Promo Video</a>
+            </div>
+        </div>
+        """
+        return await self._send_email(email, name, subject, html_body)
+
+    async def send_instagram_promo_status_update(
+        self,
+        email: str,
+        customer_name: str,
+        submission: Dict[str, Any],
+        event: str,
+    ):
+        if not email:
+            return False
+        name = customer_name or "there"
+        order_id = submission.get("order_id", "")
+        promo_url = self._frontend_url(f"/instagram-promo?orderId={order_id}")
+        prize_label = (submission.get("prize_snapshot") or {}).get("label") or "Free decant"
+        reason = submission.get("rejection_reason") or ""
+
+        if event == "approved":
+            subject = "Your video is approved — you've won a gift!"
+            body = f"""
+            <p>Great news! Your Instagram promo video has been <strong>approved</strong>.</p>
+            <p>You have won: <strong>{prize_label}</strong></p>
+            <p>We will ship your gift to the address on your original order.</p>
+            """
+        elif event == "rejected":
+            subject = "Instagram promo — not selected"
+            body = f"""
+            <p>Thank you for participating in our Instagram promo.</p>
+            <p>Your entry was <strong>not selected</strong> this time.</p>
+            {f'<p style="font-size: 13px; color: #6b7280;">Note: {reason}</p>' if reason else ''}
+            """
+        elif event == "fulfilled":
+            subject = "Your Instagram promo prize has been shipped"
+            body = f"""
+            <p>Your promo prize (<strong>{prize_label}</strong>) has been shipped.</p>
+            <p>We hope you enjoy your complimentary decant!</p>
+            """
+        else:
+            return False
+
+        html_body = f"""
+        <div style="font-family: serif; color: #022c22; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #f0fdf4;">
+            <h2 style="text-transform: uppercase; letter-spacing: 0.2em; border-bottom: 2px solid #059669; padding-bottom: 10px;">Instagram Promo Update</h2>
+            <p>Hi {name},</p>
+            {body}
+            <div style="margin: 30px 0;">
+                <a href="{promo_url}" style="background-color: #022c22; color: white; padding: 12px 25px; text-decoration: none; font-weight: bold; text-transform: uppercase; letter-spacing: 0.1em; border-radius: 5px;">View Promo Status</a>
+            </div>
+        </div>
+        """
+        return await self._send_email(email, name, subject, html_body)

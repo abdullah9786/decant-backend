@@ -72,8 +72,37 @@ async def connect_to_mongo():
     try:
         await db.db["orders"].create_index("user_id", name="orders_user_id")
         await db.db["orders"].create_index("customer_email", name="orders_customer_email")
+        await db.db["orders"].create_index(
+            "instagram_promo_opt_in",
+            name="orders_instagram_promo_opt_in",
+        )
     except (DuplicateKeyError, OperationFailure) as e:
         logging.warning("Order user lookup indexes: %s", e)
+
+    try:
+        await db.db["instagram_promo_submissions"].create_index(
+            "order_id",
+            unique=True,
+            name="uniq_promo_submission_order_id",
+        )
+        await db.db["instagram_promo_submissions"].create_index(
+            "post_url",
+            unique=True,
+            name="uniq_promo_submission_post_url",
+            partialFilterExpression={
+                "post_url": {"$exists": True, "$type": "string"},
+            },
+        )
+        await db.db["instagram_promo_submissions"].create_index(
+            [("poster_instagram_username", 1), ("submitted_at", -1)],
+            name="promo_poster_submitted_at",
+        )
+        await db.db["instagram_promo_submissions"].create_index(
+            "status",
+            name="promo_submission_status",
+        )
+    except (DuplicateKeyError, OperationFailure) as e:
+        logging.warning("Instagram promo submission indexes: %s", e)
 
     # Blog: moderation queue + author listing + unique published slugs
     try:

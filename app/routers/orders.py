@@ -78,7 +78,8 @@ async def track_order(id: str, db=Depends(get_database)):
     order = await order_service.get_by_id(id)
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
-    return order
+    enriched = await order_service._attach_promo_to_orders([order])
+    return enriched[0]
 
 @router.post("/{order_id}/customer-cancel")
 async def customer_cancel_order(

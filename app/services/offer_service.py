@@ -40,11 +40,13 @@ class OfferService:
         return query
 
     async def get_all(self):
-        cursor = self.collection.find().sort("created_at", -1)
+        cursor = self.collection.find().sort([("sort_order", 1), ("created_at", -1)])
         return await cursor.to_list(length=200)
 
     async def get_active(self):
-        cursor = self.collection.find(self._active_query()).sort("created_at", -1)
+        cursor = self.collection.find(self._active_query()).sort(
+            [("sort_order", 1), ("created_at", -1)]
+        )
         return await cursor.to_list(length=200)
 
     async def get_active_by_type(self, offer_type: str):
@@ -61,6 +63,10 @@ class OfferService:
     async def get_active_mystery_gift(self):
         """The single active mystery-gift offer (or `None`)."""
         return await self.get_active_by_type("mystery_gift")
+
+    async def get_active_instagram_promo(self):
+        """The single active instagram_promo campaign (or `None`)."""
+        return await self.get_active_by_type("instagram_promo")
 
     @staticmethod
     def resolve_mystery_tier(config: Optional[dict], subtotal: float) -> Optional[dict]:
@@ -137,9 +143,19 @@ class OfferService:
             slug = f"{base_slug}-{counter}"
             counter += 1
 
+    async def _next_sort_order(self) -> int:
+        doc = await self.collection.find_one(
+            {},
+            sort=[("sort_order", -1)],
+            projection={"sort_order": 1},
+        )
+        return int((doc or {}).get("sort_order") or 0) + 1
+
     async def create(self, offer_in: OfferCreate):
         offer_dict = offer_in.model_dump()
         offer_dict["created_at"] = datetime.now(timezone.utc)
+        if not offer_dict.get("sort_order"):
+            offer_dict["sort_order"] = await self._next_sort_order()
         if not offer_dict.get("slug"):
             offer_dict["slug"] = await self._unique_slug(_slugify(offer_dict["name"]))
         result = await self.collection.insert_one(offer_dict)

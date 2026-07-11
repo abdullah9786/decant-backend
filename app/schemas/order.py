@@ -84,6 +84,8 @@ class OrderBase(BaseModel):
     idempotency_key: Optional[str] = None
     instagram_packing_opt_in: bool = False
     instagram_username: Optional[str] = None
+    instagram_promo_opt_in: bool = False
+    instagram_promo_campaign_id: Optional[str] = None
 
 class OrderCreate(OrderBase):
     pass
@@ -95,9 +97,19 @@ class OrderUpdate(BaseModel):
     payment_details: Optional[Dict[str, Any]] = None
     customer_phone: Optional[str] = None
 
+class PromoSubmissionSummary(BaseModel):
+    status: str
+    poster_instagram_username: Optional[str] = None
+    post_url: Optional[str] = None
+    prize_label: Optional[str] = None
+    deadline_at: Optional[datetime] = None
+    rejection_reason: Optional[str] = None
+
+
 class OrderOut(OrderBase):
     id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    promo_submission: Optional[PromoSubmissionSummary] = None
 
     class Config:
         populate_by_name = True
@@ -122,6 +134,8 @@ class OrderTrackOut(BaseModel):
     cancelled_at: Optional[datetime] = None
     cancelled_by: Optional[str] = None
     cancellation_reason: Optional[str] = None
+    instagram_promo_opt_in: bool = False
+    promo_submission: Optional[PromoSubmissionSummary] = None
 
     class Config:
         populate_by_name = True
