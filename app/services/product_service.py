@@ -49,6 +49,10 @@ class ProductService:
         include_inactive: bool = False,
         category_id: Optional[str] = None,
         product_type: Optional[str] = None,
+        exclude_product_type: Optional[str] = None,
+        skip: Optional[int] = None,
+        limit: Optional[int] = None,
+        paginate: bool = False,
     ):
         query: dict = {}
         if not include_inactive:
@@ -65,6 +69,8 @@ class ProductService:
             query["is_new_arrival"] = is_new_arrival
         if product_type:
             query["product_type"] = product_type
+        elif exclude_product_type:
+            query["product_type"] = {"$ne": exclude_product_type}
         if search:
             # Escape regex special chars so a query like "L'Eau (Issey)" doesn't
             # blow up the Mongo regex engine; substring + case-insensitive only.
@@ -82,7 +88,15 @@ class ProductService:
             cursor = cursor.sort("created_at", -1)
         else:
             cursor = cursor.sort([("sort_order", 1), ("created_at", -1)])
-        products = await cursor.to_list(length=100)
+
+        skip_val = skip or 0
+        limit_val = limit or 50
+        total: Optional[int] = None
+        if paginate:
+            total = await self.collection.count_documents(query)
+            cursor = cursor.skip(skip_val).limit(limit_val)
+
+        products = await cursor.to_list(length=None)
         active_chips_by_id = await self._fetch_active_chips_by_id()
         # Read-only stock (no write-on-read), one bulk query for all set
         # components (instead of N+1), then in-memory chip attachment. This
@@ -90,7 +104,17 @@ class ProductService:
         for product in products:
             self._ensure_stock_ml_readonly(product)
         await self._enrich_set_items_bulk(products)
-        return [self._attach_chips(product, active_chips_by_id) for product in products]
+        enriched = [self._attach_chips(product, active_chips_by_id) for product in products]
+
+        if paginate and total is not None:
+            return {
+                "items": enriched,
+                "total": total,
+                "skip": skip_val,
+                "limit": limit_val,
+                "has_more": skip_val + len(enriched) < total,
+            }
+        return enriched
 
     async def search(
         self,

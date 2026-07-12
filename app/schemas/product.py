@@ -110,3 +110,16 @@ class ProductSearchResponse(BaseModel):
     items: List[ProductOut]
     total: int
     has_more: bool
+
+
+class ProductListResponse(BaseModel):
+    """Paginated product list returned by `GET /products?paginated=true`.
+
+    Used by the admin products table; the default list endpoint still returns
+    a plain array for backward compatibility with existing callers.
+    """
+    items: List[ProductOut]
+    total: int
+    skip: int
+    limit: int
+    has_more: bool

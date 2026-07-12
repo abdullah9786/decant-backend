@@ -6,6 +6,7 @@ from app.schemas.product import (
     ProductOut,
     BulkChipUpdate,
     ProductSearchResponse,
+    ProductListResponse,
 )
 from app.services.product_service import ProductService
 from app.services.offer_service import OfferService
@@ -51,9 +52,9 @@ async def bulk_update_chips(
     await revalidate_products_catalog()
     return result
 
-@router.get("", response_model=List[ProductOut])
+@router.get("")
 async def get_products(
-    fragrance_family: Optional[str] = None, 
+    fragrance_family: Optional[str] = None,
     brand: Optional[str] = None,
     is_featured: Optional[bool] = None,
     is_new_arrival: Optional[bool] = None,
@@ -62,9 +63,32 @@ async def get_products(
     include_inactive: bool = False,
     category_id: Optional[str] = None,
     product_type: Optional[str] = None,
-    db=Depends(get_database)
+    exclude_product_type: Optional[str] = None,
+    paginated: bool = False,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    db=Depends(get_database),
 ):
     product_service = ProductService(db)
+    if paginated:
+        result = await product_service.get_all(
+            fragrance_family,
+            brand,
+            is_featured,
+            is_new_arrival,
+            q,
+            sort_by,
+            include_inactive,
+            category_id,
+            product_type,
+            exclude_product_type,
+            skip=skip,
+            limit=limit,
+            paginate=True,
+        )
+        result["items"] = await _annotate_with_deal(db, result["items"])
+        return ProductListResponse(**result)
+
     products = await product_service.get_all(
         fragrance_family,
         brand,
@@ -75,6 +99,7 @@ async def get_products(
         include_inactive,
         category_id,
         product_type,
+        exclude_product_type,
     )
     return await _annotate_with_deal(db, products)
 
