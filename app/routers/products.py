@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, status, HTTPException, Query
-from typing import List, Optional
+from typing import List, Optional, Union
 from app.schemas.product import (
     ProductCreate,
     ProductUpdate,
@@ -52,7 +52,7 @@ async def bulk_update_chips(
     await revalidate_products_catalog()
     return result
 
-@router.get("")
+@router.get("", response_model=Union[List[ProductOut], ProductListResponse])
 async def get_products(
     fragrance_family: Optional[str] = None,
     brand: Optional[str] = None,
@@ -101,7 +101,8 @@ async def get_products(
         product_type,
         exclude_product_type,
     )
-    return await _annotate_with_deal(db, products)
+    annotated = await _annotate_with_deal(db, products)
+    return [ProductOut.model_validate(p) for p in annotated]
 
 
 @router.get("/search", response_model=ProductSearchResponse)
