@@ -64,6 +64,8 @@ async def get_products(
     category_id: Optional[str] = None,
     product_type: Optional[str] = None,
     exclude_product_type: Optional[str] = None,
+    featured_decant: Optional[bool] = None,
+    featured_sealed_bottle: Optional[bool] = None,
     paginated: bool = False,
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
@@ -82,6 +84,8 @@ async def get_products(
             category_id,
             product_type,
             exclude_product_type,
+            featured_decant=featured_decant,
+            featured_sealed_bottle=featured_sealed_bottle,
             skip=skip,
             limit=limit,
             paginate=True,
@@ -100,6 +104,8 @@ async def get_products(
         category_id,
         product_type,
         exclude_product_type,
+        featured_decant=featured_decant,
+        featured_sealed_bottle=featured_sealed_bottle,
     )
     annotated = await _annotate_with_deal(db, products)
     return [ProductOut.model_validate(p) for p in annotated]

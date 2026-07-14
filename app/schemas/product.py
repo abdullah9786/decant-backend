@@ -43,6 +43,8 @@ class ProductBase(BaseModel):
     stock_ml: int = 0
     sort_order: int = 0
     is_featured: bool = False
+    featured_decant: bool = False
+    featured_sealed_bottle: bool = False
     is_new_arrival: bool = False
     is_active: bool = True
     notes_top: List[str] = []
@@ -73,6 +75,8 @@ class ProductUpdate(BaseModel):
     stock_ml: Optional[int] = None
     sort_order: Optional[int] = None
     is_featured: Optional[bool] = None
+    featured_decant: Optional[bool] = None
+    featured_sealed_bottle: Optional[bool] = None
     is_new_arrival: Optional[bool] = None
     is_active: Optional[bool] = None
     notes_top: Optional[List[str]] = None

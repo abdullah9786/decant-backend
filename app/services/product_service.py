@@ -50,6 +50,8 @@ class ProductService:
         category_id: Optional[str] = None,
         product_type: Optional[str] = None,
         exclude_product_type: Optional[str] = None,
+        featured_decant: Optional[bool] = None,
+        featured_sealed_bottle: Optional[bool] = None,
         skip: Optional[int] = None,
         limit: Optional[int] = None,
         paginate: bool = False,
@@ -71,6 +73,10 @@ class ProductService:
             query["product_type"] = product_type
         elif exclude_product_type:
             query["product_type"] = {"$ne": exclude_product_type}
+        if featured_decant is not None:
+            query["featured_decant"] = featured_decant
+        if featured_sealed_bottle is not None:
+            query["featured_sealed_bottle"] = featured_sealed_bottle
         if search:
             # Escape regex special chars so a query like "L'Eau (Issey)" doesn't
             # blow up the Mongo regex engine; substring + case-insensitive only.
