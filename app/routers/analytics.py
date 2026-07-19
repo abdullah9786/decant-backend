@@ -1,9 +1,14 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query, Request, status
 from app.db.mongodb import get_database
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict
-from app.utils.deps import require_admin
+from app.utils.deps import require_admin, get_current_user_optional
+from app.schemas.search_analytics import (
+    SearchQueryLogCreate,
+    SearchQueryStatsResponse,
+)
+from app.services.search_analytics_service import SearchAnalyticsService
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 
@@ -84,3 +89,34 @@ async def get_stats(db: AsyncIOMotorDatabase = Depends(get_database), _admin=Dep
         "users_change": "+15.2%",
         "low_stock_change": "-2"
     }
+
+
+@router.post("/search-queries", status_code=status.HTTP_202_ACCEPTED)
+async def log_search_query(
+    body: SearchQueryLogCreate,
+    request: Request,
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    current_user=Depends(get_current_user_optional),
+):
+    """Record a committed storefront search (fire-and-forget from the client)."""
+    service = SearchAnalyticsService(db)
+    client_ip = request.client.host if request.client else None
+    user_label = (current_user or {}).get("email") or "Guest user"
+    await service.log_search(
+        query=body.query,
+        result_count=body.result_count,
+        source=body.source,
+        client_ip=client_ip,
+        user_label=user_label,
+    )
+    return {"ok": True}
+
+
+@router.get("/search-queries", response_model=SearchQueryStatsResponse)
+async def get_search_query_stats(
+    days: int = Query(30, ge=1, le=90),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    _admin=Depends(require_admin),
+):
+    service = SearchAnalyticsService(db)
+    return await service.get_stats(days)

@@ -135,6 +135,23 @@ async def connect_to_mongo():
     except (DuplicateKeyError, OperationFailure) as e:
         logging.warning("Product listing indexes: %s", e)
 
+    try:
+        await db.db["search_queries"].create_index(
+            "created_at",
+            expireAfterSeconds=90 * 24 * 60 * 60,
+            name="search_queries_ttl",
+        )
+        await db.db["search_queries"].create_index(
+            [("query_normalized", 1), ("created_at", -1)],
+            name="search_queries_normalized_created",
+        )
+        await db.db["search_queries"].create_index(
+            [("client_ip", 1), ("created_at", -1)],
+            name="search_queries_ip_created",
+        )
+    except (DuplicateKeyError, OperationFailure) as e:
+        logging.warning("Search query analytics indexes: %s", e)
+
     print(f"\n\033[92m[SUCCESS]\033[0m Database connected: {settings.DATABASE_NAME}")
     logging.info(f"Connected to MongoDB: {settings.DATABASE_NAME}")
 
