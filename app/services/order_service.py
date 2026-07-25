@@ -166,13 +166,44 @@ class OrderService:
                 order["promo_submission"] = summary
         return orders
 
-    async def get_all(self, user_id: str = None):
-        query = {}
+    async def get_all(self, user_id: str = None, q: str = None):
+        query: dict = {}
         if user_id:
             query["user_id"] = user_id
-        cursor = self.collection.find(query).sort("created_at", -1)
-        orders = await cursor.to_list(length=100)
+
+        search = (q or "").strip()
+        if search:
+            query.update(self._build_order_search_filter(search))
+
+        limit = 500 if search else 100
+        cursor = self.collection.find(query).sort("created_at", -1).limit(limit)
+        orders = await cursor.to_list(length=limit)
         return await self._attach_promo_to_orders(orders)
+
+    def _build_order_search_filter(self, q: str) -> dict:
+        """Match orders by customer details, tracking, or any line-item product."""
+        escaped = re.escape(q.strip())
+        regex = {"$regex": escaped, "$options": "i"}
+        or_clauses: list[dict] = [
+            {"customer_name": regex},
+            {"customer_email": regex},
+            {"customer_phone": regex},
+            {"shipping_address": regex},
+            {"tracking_id": regex},
+            {"courier_name": regex},
+            {"coupon_code": regex},
+            {"referral_code": regex},
+            {"items.name": regex},
+            {"items.product_id": regex},
+            {"items.bottle_name": regex},
+            {"items.set_items.name": regex},
+            {"items.set_items.brand": regex},
+            {"items.selected_products.name": regex},
+            {"free_decants.name": regex},
+        ]
+        if ObjectId.is_valid(q):
+            or_clauses.append({"_id": ObjectId(q)})
+        return {"$or": or_clauses}
 
     def _orders_query_for_user(self, user_id: str, email: Optional[str] = None) -> dict:
         or_clauses: list[dict] = [{"user_id": user_id}]

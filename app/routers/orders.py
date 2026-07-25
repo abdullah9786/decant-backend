@@ -66,10 +66,15 @@ async def create_order(order_in: OrderCreate, db=Depends(get_database), current_
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 @router.get("/", response_model=List[OrderOut])
-async def get_orders(user_id: Optional[str] = None, db=Depends(get_database), current_user=Depends(get_current_user)):
+async def get_orders(
+    user_id: Optional[str] = None,
+    q: Optional[str] = None,
+    db=Depends(get_database),
+    current_user=Depends(get_current_user),
+):
     order_service = OrderService(db)
     if current_user.get("is_admin", False):
-        return await order_service.get_all(user_id)
+        return await order_service.get_all(user_id, q=q)
     return await order_service.get_all(str(current_user["_id"]))
 
 @router.get("/track/{id}", response_model=OrderTrackOut)
