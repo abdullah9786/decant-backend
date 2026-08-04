@@ -6,6 +6,7 @@ import hmac
 import json
 from bson import ObjectId
 from pydantic import BaseModel
+from pymongo.errors import DuplicateKeyError
 from app.schemas.order import (
     OrderCreate,
     OrderUpdate,
@@ -16,6 +17,11 @@ from app.schemas.order import (
 from app.services.order_service import OrderService
 from app.services.shipping_service import ShippingService
 from app.integrations.shipping import ShippingProviderError
+from app.integrations.shipping.nimbuspost import (
+    extract_webhook_order_number,
+    extract_webhook_shipment_info,
+    map_webhook_status,
+)
 from app.db.mongodb import get_database
 from app.utils.deps import get_current_user, get_current_user_optional, require_admin
 from app.services.auth_service import AuthService
@@ -264,85 +270,9 @@ async def update_order(id: str, order_in: OrderUpdate, db=Depends(get_database),
     old_order = await order_service.get_by_id(id)
     updated = await order_service.update(id, order_in)
 
-    if old_order and updated and old_order.get("influencer_id"):
-        try:
-            csvc = CommissionService(db)
-            order_id_str = str(old_order["_id"])
-            old_status = old_order.get("status", "")
-            new_status = updated.get("status", "")
-
-            if new_status == "delivered" and old_status != "delivered":
-                # For COD orders, delivery == cash collected: flip payment
-                # status to paid and stamp the collection time. We also
-                # create + approve the influencer commission in one step
-                # (no `pending` phase for COD, since we don't book commission
-                # until the cash is actually in hand).
-                if updated.get("payment_method") == "cod":
-                    cod_paid_at = datetime.now(timezone.utc)
-                    await db["orders"].update_one(
-                        {"_id": old_order["_id"]},
-                        {"$set": {
-                            "payment_status": "paid",
-                            "payment_details.collected_at": cod_paid_at,
-                        }},
-                    )
-                    updated["payment_status"] = "paid"
-                    payment_details = dict(updated.get("payment_details") or {})
-                    payment_details["collected_at"] = cod_paid_at
-                    updated["payment_details"] = payment_details
-
-                    if updated.get("influencer_id"):
-                        existing_comm = await db["commissions"].find_one({
-                            "order_id": order_id_str,
-                        })
-                        if not existing_comm:
-                            created = await csvc.create_commission(
-                                influencer_id=updated["influencer_id"],
-                                order_id=order_id_str,
-                                order_total=updated.get("total_amount", 0),
-                                buyer_user_id=updated.get("user_id"),
-                            )
-                            if created:
-                                await csvc.approve_commission(str(created["_id"]))
-                else:
-                    comm = await db["commissions"].find_one({
-                        "order_id": order_id_str, "status": "pending"
-                    })
-                    if comm:
-                        await csvc.approve_commission(str(comm["_id"]))
-
-            if new_status in ("cancelled", "refunded") and old_status not in ("cancelled", "refunded"):
-                comm = await db["commissions"].find_one({
-                    "order_id": order_id_str,
-                    "status": {"$in": ["pending", "approved"]},
-                })
-                if comm:
-                    await csvc.cancel_commission(str(comm["_id"]))
-
-            # Recalculate commission when items change (partial cancellation)
-            if order_in.items is not None:
-                fulfilled_total = sum(
-                    i.get("price", 0) * i.get("quantity", 0)
-                    for i in updated.get("items", [])
-                    if i.get("status") != "cancelled"
-                )
-                comm = await db["commissions"].find_one({
-                    "order_id": order_id_str,
-                    "status": {"$in": ["pending", "approved"]},
-                })
-                if comm and fulfilled_total != comm.get("order_total", 0):
-                    original = comm.get("original_order_total") or comm.get("order_total", 0)
-                    rate = comm.get("commission_rate", 0.10)
-                    await db["commissions"].update_one(
-                        {"_id": comm["_id"]},
-                        {"$set": {
-                            "original_order_total": round(original, 2),
-                            "order_total": round(fulfilled_total, 2),
-                            "commission_amount": round(fulfilled_total * rate, 2),
-                        }},
-                    )
-        except Exception as e:
-            print(f"[COMMISSION] Auto-update error (non-blocking): {e}")
+    if old_order and updated:
+        csvc = CommissionService(db)
+        updated = await csvc.apply_order_status_effects(old_order, updated, order_in)
 
     return updated
 
@@ -898,6 +828,94 @@ async def razorpay_webhook(request: Request, db=Depends(get_database)):
 
     print(f"[WEBHOOK] Order {new_order['_id']} created for rzp order {rzp_order_id}")
     return {"ok": True, "order_id": str(new_order["_id"])}
+
+
+@router.post("/webhook/nimbuspost")
+async def nimbuspost_webhook(request: Request, db=Depends(get_database)):
+    """
+    Subscribe to the `order.updated` event in NimbusPost (Settings →
+    Webhooks, or `POST /v2/webhooks`) — it fires `status: "shipped"` exactly
+    on the booked→shipped (picked up) transition and `status: "delivered"`
+    on delivery, per NimbusPost's Webhooks API reference. The payload is a
+    flat JSON object (see `map_webhook_status()` / `extract_webhook_*()` in
+    `app/integrations/shipping/nimbuspost.py` for the exact shape).
+
+    Reuses `OrderService.update()` (shipped/delivered emails + Instagram
+    promo invite) and `CommissionService.apply_order_status_effects()`
+    (influencer commission + COD payment flip) so a webhook-driven status
+    change behaves identically to an admin manually updating the order.
+    """
+    body = await request.body()
+    signature = request.headers.get("x-nimbus-signature", "")
+    delivery_id = request.headers.get("x-nimbus-delivery", "")
+    event = request.headers.get("x-nimbus-event", "")
+    print(
+        f"\n\033[96m[WEBHOOK]\033[0m nimbuspost webhook hit "
+        f"(event={event}, body={len(body)} bytes, delivery={delivery_id}, has_sig={bool(signature)})"
+    )
+
+    if settings.NIMBUSPOST_WEBHOOK_SECRET:
+        # Header format is `sha256=<lowercase hex hmac of the raw body>`.
+        expected = "sha256=" + hmac.new(
+            settings.NIMBUSPOST_WEBHOOK_SECRET.encode(),
+            body,
+            hashlib.sha256,
+        ).hexdigest()
+        if not signature or not hmac.compare_digest(expected, signature):
+            raise HTTPException(status_code=400, detail="Invalid webhook signature")
+
+    try:
+        payload = json.loads(body)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+
+    # Deliveries are at-least-once — dedupe on x-nimbus-delivery so a retry
+    # doesn't re-send emails / re-run commission logic.
+    if delivery_id:
+        try:
+            await db["webhook_deliveries"].insert_one({
+                "provider": "nimbuspost",
+                "delivery_id": delivery_id,
+                "received_at": datetime.now(timezone.utc),
+            })
+        except DuplicateKeyError:
+            return {"ok": True, "skipped": "duplicate_delivery"}
+
+    order_number = extract_webhook_order_number(payload)
+    if not order_number or not ObjectId.is_valid(order_number):
+        print(f"[WEBHOOK] nimbuspost payload missing/unrecognized order_number: {payload}")
+        return {"ok": True, "skipped": "missing_order_number", "event": event}
+
+    order = await db["orders"].find_one({"_id": ObjectId(order_number)})
+    if not order:
+        return {"ok": True, "skipped": "order_not_found"}
+
+    new_status = map_webhook_status(payload)
+    if not new_status:
+        print(f"[WEBHOOK] nimbuspost event with unrecognized status: event={event} payload={payload}")
+        return {"ok": True, "skipped": "unrecognized_status", "event": event}
+
+    old_status = order.get("status", "")
+    if old_status == new_status:
+        return {"ok": True, "skipped": "no_status_change"}
+    # Never let a "picked" event downgrade an order that's already further
+    # along (delivered / cancelled / refunded) — only ever move forward.
+    if new_status == "shipped" and old_status in ("delivered", "cancelled", "refunded"):
+        return {"ok": True, "skipped": f"ignoring {new_status} for {old_status} order"}
+
+    update_fields: Dict[str, Any] = {"status": new_status}
+    update_fields.update(extract_webhook_shipment_info(payload))
+    order_in = OrderUpdate(**update_fields)
+
+    order_service = OrderService(db)
+    updated = await order_service.update(order_number, order_in)
+
+    if updated:
+        csvc = CommissionService(db)
+        updated = await csvc.apply_order_status_effects(order, updated, order_in)
+
+    print(f"[WEBHOOK] nimbuspost order {order_number} status -> {new_status}")
+    return {"ok": True, "order_id": order_number, "status": new_status}
 
 
 class CreateShippingOrderResponse(BaseModel):

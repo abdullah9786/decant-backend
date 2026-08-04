@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     # NimbusPost shipping (order creation only — courier booked in NimbusPost dashboard)
     NIMBUSPOST_API_KEY: str = os.getenv("NIMBUSPOST_API_KEY", "").strip()
     NIMBUSPOST_API_SECRET: str = os.getenv("NIMBUSPOST_API_SECRET", "").strip()
+    NIMBUSPOST_WEBHOOK_SECRET: str = os.getenv("NIMBUSPOST_WEBHOOK_SECRET", "").strip()
     NIMBUSPOST_WAREHOUSE_ID: str = os.getenv("NIMBUSPOST_WAREHOUSE_ID", "").strip()
     NIMBUSPOST_DEFAULT_STATE: str = os.getenv("NIMBUSPOST_DEFAULT_STATE", "Maharashtra").strip()
     NIMBUSPOST_DEFAULT_WEIGHT_G: int = int(os.getenv("NIMBUSPOST_DEFAULT_WEIGHT_G", "250"))

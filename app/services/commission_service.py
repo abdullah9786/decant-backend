@@ -1,7 +1,7 @@
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from bson import ObjectId
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 
 class CommissionService:
@@ -10,6 +10,98 @@ class CommissionService:
         self.profiles = db["influencer_profiles"]
         self.payouts = db["payouts"]
         self.orders = db["orders"]
+
+    # ── Order status side effects ──────────────────────────────────
+    #
+    # Shared by the admin `PUT /orders/{id}` route and the NimbusPost status
+    # webhook, so a delivery/cancellation triggers identical commission +
+    # COD-payment behavior no matter what/who changed the order status.
+
+    async def apply_order_status_effects(
+        self, old_order: dict, updated: dict, order_in: Any
+    ) -> dict:
+        if not old_order.get("influencer_id"):
+            return updated
+
+        try:
+            order_id_str = str(old_order["_id"])
+            old_status = old_order.get("status", "")
+            new_status = updated.get("status", "")
+
+            if new_status == "delivered" and old_status != "delivered":
+                # For COD orders, delivery == cash collected: flip payment
+                # status to paid and stamp the collection time. We also
+                # create + approve the influencer commission in one step
+                # (no `pending` phase for COD, since we don't book commission
+                # until the cash is actually in hand).
+                if updated.get("payment_method") == "cod":
+                    cod_paid_at = datetime.now(timezone.utc)
+                    await self.orders.update_one(
+                        {"_id": old_order["_id"]},
+                        {"$set": {
+                            "payment_status": "paid",
+                            "payment_details.collected_at": cod_paid_at,
+                        }},
+                    )
+                    updated["payment_status"] = "paid"
+                    payment_details = dict(updated.get("payment_details") or {})
+                    payment_details["collected_at"] = cod_paid_at
+                    updated["payment_details"] = payment_details
+
+                    if updated.get("influencer_id"):
+                        existing_comm = await self.commissions.find_one({
+                            "order_id": order_id_str,
+                        })
+                        if not existing_comm:
+                            created = await self.create_commission(
+                                influencer_id=updated["influencer_id"],
+                                order_id=order_id_str,
+                                order_total=updated.get("total_amount", 0),
+                                buyer_user_id=updated.get("user_id"),
+                            )
+                            if created:
+                                await self.approve_commission(str(created["_id"]))
+                else:
+                    comm = await self.commissions.find_one({
+                        "order_id": order_id_str, "status": "pending"
+                    })
+                    if comm:
+                        await self.approve_commission(str(comm["_id"]))
+
+            if new_status in ("cancelled", "refunded") and old_status not in ("cancelled", "refunded"):
+                comm = await self.commissions.find_one({
+                    "order_id": order_id_str,
+                    "status": {"$in": ["pending", "approved"]},
+                })
+                if comm:
+                    await self.cancel_commission(str(comm["_id"]))
+
+            # Recalculate commission when items change (partial cancellation)
+            if getattr(order_in, "items", None) is not None:
+                fulfilled_total = sum(
+                    i.get("price", 0) * i.get("quantity", 0)
+                    for i in updated.get("items", [])
+                    if i.get("status") != "cancelled"
+                )
+                comm = await self.commissions.find_one({
+                    "order_id": order_id_str,
+                    "status": {"$in": ["pending", "approved"]},
+                })
+                if comm and fulfilled_total != comm.get("order_total", 0):
+                    original = comm.get("original_order_total") or comm.get("order_total", 0)
+                    rate = comm.get("commission_rate", 0.10)
+                    await self.commissions.update_one(
+                        {"_id": comm["_id"]},
+                        {"$set": {
+                            "original_order_total": round(original, 2),
+                            "order_total": round(fulfilled_total, 2),
+                            "commission_amount": round(fulfilled_total * rate, 2),
+                        }},
+                    )
+        except Exception as e:
+            print(f"[COMMISSION] Auto-update error (non-blocking): {e}")
+
+        return updated
 
     # ── Commission Lifecycle ──────────────────────────────────────
 

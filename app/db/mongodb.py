@@ -152,6 +152,22 @@ async def connect_to_mongo():
     except (DuplicateKeyError, OperationFailure) as e:
         logging.warning("Search query analytics indexes: %s", e)
 
+    # Dedup for at-least-once shipping provider webhooks (NimbusPost, etc.) —
+    # (provider, delivery_id) is unique so a redelivered event is a no-op.
+    try:
+        await db.db["webhook_deliveries"].create_index(
+            [("provider", 1), ("delivery_id", 1)],
+            unique=True,
+            name="uniq_webhook_provider_delivery",
+        )
+        await db.db["webhook_deliveries"].create_index(
+            "received_at",
+            expireAfterSeconds=30 * 24 * 60 * 60,
+            name="webhook_deliveries_ttl",
+        )
+    except (DuplicateKeyError, OperationFailure) as e:
+        logging.warning("Webhook deliveries indexes: %s", e)
+
     print(f"\n\033[92m[SUCCESS]\033[0m Database connected: {settings.DATABASE_NAME}")
     logging.info(f"Connected to MongoDB: {settings.DATABASE_NAME}")
 

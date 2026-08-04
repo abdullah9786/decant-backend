@@ -423,3 +423,55 @@ class NimbusPostAdapter(ShippingProviderAdapter):
             "status": "created",
             "raw_response": body,
         }
+
+
+# ── Webhook helpers ──────────────────────────────────────────────────────
+#
+# Per NimbusPost's Webhooks API reference (WebhookEventPayload schema), every
+# delivery — for order.created, order.updated, and tracking.updated alike —
+# is a single FLAT JSON object with a fixed 23-key set. Unpopulated keys are
+# sent as "" (never omitted, never null). No `data` wrapper, no nested
+# `shipment`/`latest` objects.
+#
+# Relevant keys: `order_number` (echoes what we sent as order_number at
+# create — our Decume order `_id`), `awb_number`, `courier_name`, and
+# `status` — a space-separated literal: "created" | "shipped" | "in transit"
+# | "delivered" | "rto initiated" | "cancelled". `order.updated` sets
+# `status: "shipped"` exactly on the booked→shipped (picked up) transition
+# and `status: "delivered"` on delivery, so we match by exact value — no
+# fuzzy keyword matching needed. (`order_id` is NimbusPost's own internal
+# id, not ours — never use it to look up the Decume order.)
+
+_WEBHOOK_STATUS_MAP = {
+    "shipped": "shipped",
+    "delivered": "delivered",
+}
+
+
+def extract_webhook_order_number(payload: Dict[str, Any]) -> Optional[str]:
+    """Find the Decume order id in a NimbusPost webhook payload."""
+    val = payload.get("order_number")
+    if val is not None and str(val).strip():
+        return str(val).strip()
+    return None
+
+
+def map_webhook_status(payload: Dict[str, Any]) -> Optional[str]:
+    """Map a webhook payload's `status` to Decume's internal order status
+    (`shipped` or `delivered`), or None if it's some other status
+    (created/in transit/rto initiated/cancelled/unrecognized)."""
+    status = str(payload.get("status") or "").strip().lower()
+    return _WEBHOOK_STATUS_MAP.get(status)
+
+
+def extract_webhook_shipment_info(payload: Dict[str, Any]) -> Dict[str, str]:
+    """Pull AWB / courier name off a webhook payload for `tracking_id` /
+    `courier_name` on the Decume order, if present."""
+    info: Dict[str, str] = {}
+    awb = payload.get("awb_number")
+    courier = payload.get("courier_name")
+    if awb:
+        info["tracking_id"] = str(awb)
+    if courier:
+        info["courier_name"] = str(courier)
+    return info
