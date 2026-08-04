@@ -4,6 +4,17 @@ from datetime import datetime, timezone
 from .user import PyObjectId
 from bson import ObjectId
 
+class ShippingIntegrationRecord(BaseModel):
+    external_order_id: Optional[str] = None
+    order_number: str
+    status: str = "created"
+    created_at: Optional[datetime] = None
+    last_error: Optional[str] = None
+
+
+class ShippingIntegrations(BaseModel):
+    nimbuspost: Optional[ShippingIntegrationRecord] = None
+
 class GiftBoxSelectedProduct(BaseModel):
     product_id: str
     name: str = ""
@@ -90,6 +101,7 @@ class OrderBase(BaseModel):
     tracking_url: Optional[str] = None
     courier_name: Optional[str] = None
     shipped_at: Optional[datetime] = None
+    shipping_integrations: Optional[ShippingIntegrations] = None
 
 class OrderCreate(OrderBase):
     pass

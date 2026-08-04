@@ -14,6 +14,8 @@ from app.schemas.order import (
     InitiatePaymentRequest,
 )
 from app.services.order_service import OrderService
+from app.services.shipping_service import ShippingService
+from app.integrations.shipping import ShippingProviderError
 from app.db.mongodb import get_database
 from app.utils.deps import get_current_user, get_current_user_optional, require_admin
 from app.services.auth_service import AuthService
@@ -532,7 +534,8 @@ async def verify_and_create(
         "razorpay_order_id": data.payment_details.razorpay_order_id,
         "razorpay_payment_id": data.payment_details.razorpay_payment_id,
         "razorpay_signature": data.payment_details.razorpay_signature,
-        "paid_at": datetime.now(timezone.utc).isoformat()
+        "paid_at": datetime.now(timezone.utc).isoformat(),
+        "contact": order_in.customer_phone,
     }
 
     # 2b. If a coupon code was provided, validate and attribute to influencer
@@ -865,6 +868,7 @@ async def razorpay_webhook(request: Request, db=Depends(get_database)):
         "razorpay_payment_id": rzp_payment_id,
         "paid_at": datetime.now(timezone.utc).isoformat(),
         "source": "webhook",
+        "contact": od.get("customer_phone"),
     }
 
     order_service = OrderService(db)
@@ -894,3 +898,41 @@ async def razorpay_webhook(request: Request, db=Depends(get_database)):
 
     print(f"[WEBHOOK] Order {new_order['_id']} created for rzp order {rzp_order_id}")
     return {"ok": True, "order_id": str(new_order["_id"])}
+
+
+class CreateShippingOrderResponse(BaseModel):
+    provider: str
+    integration: Dict[str, Any]
+    created: bool
+
+
+@router.post(
+    "/{order_id}/shipping/{provider}/create",
+    response_model=CreateShippingOrderResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def create_shipping_order(
+    order_id: str,
+    provider: str,
+    db=Depends(get_database),
+    _admin=Depends(require_admin),
+):
+    """Create an order in an external shipping platform (admin only). Idempotent."""
+    shipping_service = ShippingService(db)
+    try:
+        integration, created = await shipping_service.create_external_order(order_id, provider)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Unknown shipping provider: {provider}")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ShippingProviderError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=str(exc),
+        ) from exc
+
+    return {
+        "provider": provider.lower(),
+        "integration": integration,
+        "created": created,
+    }

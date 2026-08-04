@@ -54,6 +54,16 @@ class Settings(BaseSettings):
     COD_MAX_AMOUNT: float = float(os.getenv("COD_MAX_AMOUNT", "3000"))
     COD_FEE: float = float(os.getenv("COD_FEE", "49"))
 
+    # NimbusPost shipping (order creation only — courier booked in NimbusPost dashboard)
+    NIMBUSPOST_API_KEY: str = os.getenv("NIMBUSPOST_API_KEY", "").strip()
+    NIMBUSPOST_API_SECRET: str = os.getenv("NIMBUSPOST_API_SECRET", "").strip()
+    NIMBUSPOST_WAREHOUSE_ID: str = os.getenv("NIMBUSPOST_WAREHOUSE_ID", "").strip()
+    NIMBUSPOST_DEFAULT_STATE: str = os.getenv("NIMBUSPOST_DEFAULT_STATE", "Maharashtra").strip()
+    NIMBUSPOST_DEFAULT_WEIGHT_G: int = int(os.getenv("NIMBUSPOST_DEFAULT_WEIGHT_G", "250"))
+    NIMBUSPOST_DEFAULT_LENGTH_CM: int = int(os.getenv("NIMBUSPOST_DEFAULT_LENGTH_CM", "12"))
+    NIMBUSPOST_DEFAULT_WIDTH_CM: int = int(os.getenv("NIMBUSPOST_DEFAULT_WIDTH_CM", "10"))
+    NIMBUSPOST_DEFAULT_HEIGHT_CM: int = int(os.getenv("NIMBUSPOST_DEFAULT_HEIGHT_CM", "8"))
+
     class Config:
         case_sensitive = True
         env_file = ".env"
