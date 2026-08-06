@@ -435,16 +435,28 @@ class NimbusPostAdapter(ShippingProviderAdapter):
 # Relevant keys: `order_number` (echoes what we sent as order_number at
 # create — our Decume order `_id`), `awb_number`, `courier_name`, and
 # `status` — a space-separated literal: "created" | "shipped" | "in transit"
-# | "delivered" | "rto initiated" | "cancelled". `order.updated` sets
-# `status: "shipped"` exactly on the booked→shipped (picked up) transition
-# and `status: "delivered"` on delivery, so we match by exact value — no
-# fuzzy keyword matching needed. (`order_id` is NimbusPost's own internal
-# id, not ours — never use it to look up the Decume order.)
+# | "delivered" | "rto initiated" | "cancelled". (`order_id` is NimbusPost's
+# own internal id, not ours — never use it to look up the Decume order.)
+#
+# `order.updated` is supposed to set `status: "shipped"` exactly on the
+# booked→shipped (picked up) transition — but in practice this order-level
+# transition can lag behind or never fire cleanly for some couriers: we've
+# observed a shipment sitting at NimbusPost's own `orderStatus: "booked"`
+# for 13+ hours while its courier tracking already showed "in transit"
+# scans. So we also subscribe to `tracking.updated` (fired once per real
+# courier scan) as a fallback "shipped" signal — if a scan event exists at
+# all, the parcel has physically been picked up, regardless of whether
+# NimbusPost's order-level status has caught up yet. `tracking.updated` can
+# also report `status: "delivered"`, which we still route to "delivered".
 
-_WEBHOOK_STATUS_MAP = {
+_ORDER_UPDATED_STATUS_MAP = {
     "shipped": "shipped",
     "delivered": "delivered",
 }
+
+# Tracking-scan statuses that must NOT be treated as a "shipped" signal —
+# either a no-op for us (cancelled/rto handled elsewhere) or too ambiguous.
+_TRACKING_IGNORED_STATUSES = {"cancelled", "rto initiated", ""}
 
 
 def extract_webhook_order_number(payload: Dict[str, Any]) -> Optional[str]:
@@ -455,12 +467,22 @@ def extract_webhook_order_number(payload: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-def map_webhook_status(payload: Dict[str, Any]) -> Optional[str]:
+def map_webhook_status(event: str, payload: Dict[str, Any]) -> Optional[str]:
     """Map a webhook payload's `status` to Decume's internal order status
-    (`shipped` or `delivered`), or None if it's some other status
-    (created/in transit/rto initiated/cancelled/unrecognized)."""
+    (`shipped` or `delivered`), or None if it should be ignored, based on
+    which event (`order.updated` vs `tracking.updated`) delivered it."""
     status = str(payload.get("status") or "").strip().lower()
-    return _WEBHOOK_STATUS_MAP.get(status)
+    if event == "order.updated":
+        return _ORDER_UPDATED_STATUS_MAP.get(status)
+    if event == "tracking.updated":
+        if status == "delivered":
+            return "delivered"
+        if status in _TRACKING_IGNORED_STATUSES:
+            return None
+        # Any other real scan (in transit / out for delivery / picked up /
+        # shipped / ...) — the mere existence of a scan means pickup happened.
+        return "shipped"
+    return None
 
 
 def extract_webhook_shipment_info(payload: Dict[str, Any]) -> Dict[str, str]:

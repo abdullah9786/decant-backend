@@ -833,11 +833,17 @@ async def razorpay_webhook(request: Request, db=Depends(get_database)):
 @router.post("/webhook/nimbuspost")
 async def nimbuspost_webhook(request: Request, db=Depends(get_database)):
     """
-    Subscribe to the `order.updated` event in NimbusPost (Settings →
-    Webhooks, or `POST /v2/webhooks`) — it fires `status: "shipped"` exactly
-    on the booked→shipped (picked up) transition and `status: "delivered"`
-    on delivery, per NimbusPost's Webhooks API reference. The payload is a
-    flat JSON object (see `map_webhook_status()` / `extract_webhook_*()` in
+    Subscribe to both `order.updated` AND `tracking.updated` in NimbusPost
+    (Settings → Webhooks, or `POST /v2/webhooks`). `order.updated` fires
+    `status: "shipped"` on the booked→shipped transition and `status:
+    "delivered"` on delivery — but this order-level transition can lag
+    behind or never fire cleanly for some couriers (observed: a shipment
+    stuck at NimbusPost's own `orderStatus: "booked"` for 13+ hours while
+    its courier tracking already showed "in transit" scans). `tracking.
+    updated` fires once per real courier scan, so we use it as a fallback
+    "shipped" signal — any scan existing at all means the parcel was
+    physically picked up. The payload is a flat JSON object either way (see
+    `map_webhook_status()` / `extract_webhook_*()` in
     `app/integrations/shipping/nimbuspost.py` for the exact shape).
 
     Reuses `OrderService.update()` (shipped/delivered emails + Instagram
@@ -890,7 +896,7 @@ async def nimbuspost_webhook(request: Request, db=Depends(get_database)):
     if not order:
         return {"ok": True, "skipped": "order_not_found"}
 
-    new_status = map_webhook_status(payload)
+    new_status = map_webhook_status(event, payload)
     if not new_status:
         print(f"[WEBHOOK] nimbuspost event with unrecognized status: event={event} payload={payload}")
         return {"ok": True, "skipped": "unrecognized_status", "event": event}
