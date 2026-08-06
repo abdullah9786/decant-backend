@@ -228,11 +228,12 @@ def _parse_shipping_address(order: Dict[str, Any]) -> Dict[str, Any]:
     if street_parts and street_parts[0].lower() == name.lower():
         street_parts = street_parts[1:]
 
-    address_line = ", ".join(street_parts) if street_parts else raw or "Address not provided"
-    address_opt = None
-    if len(street_parts) > 1:
-        address_line = street_parts[0]
-        address_opt = ", ".join(street_parts[1:])
+    # Send the full, unmodified shipping_address string as the address line —
+    # identical to what's shown in Decume admin's "Shipping Address" section,
+    # including city/pincode. NimbusPost also gets city/pincode/state as their
+    # own structured fields below (required for routing), but the free-text
+    # `address` line should not have anything trimmed out of it.
+    address_line = raw or "Address not provided"
 
     phone = _resolve_customer_phone_from_order(order)
     if phone is None:
@@ -254,8 +255,6 @@ def _parse_shipping_address(order: Dict[str, Any]) -> Dict[str, Any]:
         "state": state[:100],
         "phone": phone,
     }
-    if address_opt:
-        shipping["address_opt"] = address_opt[:200]
     email = (order.get("customer_email") or "").strip()
     if email:
         shipping["email"] = email[:200]
@@ -297,7 +296,7 @@ def _derive_org_charges(order: Dict[str, Any]) -> Dict[str, float]:
     if shipping_fee > 0:
         org_charges["shipping_charges"] = shipping_fee
     if cod_fee > 0:
-        org_charges["other_charges"] = cod_fee
+        org_charges["cod_charges"] = cod_fee
     if discount > 0:
         org_charges["discount_amount"] = discount
     return org_charges
