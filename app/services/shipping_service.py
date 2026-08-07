@@ -49,9 +49,14 @@ class ShippingService:
                 "created_at": datetime.now(timezone.utc),
                 "last_error": str(exc),
             }
+            integrations[provider_key] = error_record
+            # Set the whole object rather than a dotted `shipping_integrations.X`
+            # path — some existing orders have `shipping_integrations: null`
+            # explicitly stored, and Mongo rejects creating a sub-field on a
+            # null parent (WriteError code 28).
             await self.orders.update_one(
                 {"_id": ObjectId(order_id)},
-                {"$set": {f"shipping_integrations.{provider_key}": error_record}},
+                {"$set": {"shipping_integrations": integrations}},
             )
             raise
 
@@ -61,8 +66,9 @@ class ShippingService:
             "status": result.get("status") or "created",
             "created_at": datetime.now(timezone.utc),
         }
+        integrations[provider_key] = record
         await self.orders.update_one(
             {"_id": ObjectId(order_id)},
-            {"$set": {f"shipping_integrations.{provider_key}": record}},
+            {"$set": {"shipping_integrations": integrations}},
         )
         return record, True
