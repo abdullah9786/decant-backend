@@ -850,6 +850,11 @@ async def nimbuspost_webhook(request: Request, db=Depends(get_database)):
     promo invite) and `CommissionService.apply_order_status_effects()`
     (influencer commission + COD payment flip) so a webhook-driven status
     change behaves identically to an admin manually updating the order.
+
+    `webhook_deliveries` stores the full payload per delivery (30-day TTL),
+    not just the dedupe id — if a status transition doesn't happen as
+    expected, query that collection by `order_id`/`event` instead of
+    guessing at NimbusPost's status vocabulary from docs alone.
     """
     body = await request.body()
     signature = request.headers.get("x-nimbus-signature", "")
@@ -876,49 +881,74 @@ async def nimbuspost_webhook(request: Request, db=Depends(get_database)):
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
     # Deliveries are at-least-once — dedupe on x-nimbus-delivery so a retry
-    # doesn't re-send emails / re-run commission logic.
+    # doesn't re-send emails / re-run commission logic. The full payload is
+    # kept (not just the id) so a future "why didn't X update" question can
+    # be answered from this collection instead of ephemeral stdout logs —
+    # TTL-expires after 30 days (see `webhook_deliveries_ttl` index).
     if delivery_id:
         try:
             await db["webhook_deliveries"].insert_one({
                 "provider": "nimbuspost",
                 "delivery_id": delivery_id,
+                "event": event,
+                "payload": payload,
                 "received_at": datetime.now(timezone.utc),
             })
         except DuplicateKeyError:
             return {"ok": True, "skipped": "duplicate_delivery"}
 
-    order_number = extract_webhook_order_number(payload)
-    if not order_number or not ObjectId.is_valid(order_number):
-        print(f"[WEBHOOK] nimbuspost payload missing/unrecognized order_number: {payload}")
-        return {"ok": True, "skipped": "missing_order_number", "event": event}
+    try:
+        order_number = extract_webhook_order_number(payload)
+        if not order_number or not ObjectId.is_valid(order_number):
+            print(f"[WEBHOOK] nimbuspost payload missing/unrecognized order_number: {payload}")
+            return {"ok": True, "skipped": "missing_order_number", "event": event}
 
-    order = await db["orders"].find_one({"_id": ObjectId(order_number)})
-    if not order:
-        return {"ok": True, "skipped": "order_not_found"}
+        order = await db["orders"].find_one({"_id": ObjectId(order_number)})
+        if not order:
+            return {"ok": True, "skipped": "order_not_found"}
 
-    new_status = map_webhook_status(event, payload)
-    if not new_status:
-        print(f"[WEBHOOK] nimbuspost event with unrecognized status: event={event} payload={payload}")
-        return {"ok": True, "skipped": "unrecognized_status", "event": event}
+        new_status = map_webhook_status(event, payload)
+        if not new_status:
+            print(f"[WEBHOOK] nimbuspost event with unrecognized status: event={event} payload={payload}")
+            return {"ok": True, "skipped": "unrecognized_status", "event": event}
 
-    old_status = order.get("status", "")
-    if old_status == new_status:
-        return {"ok": True, "skipped": "no_status_change"}
-    # Never let a "picked" event downgrade an order that's already further
-    # along (delivered / cancelled / refunded) — only ever move forward.
-    if new_status == "shipped" and old_status in ("delivered", "cancelled", "refunded"):
-        return {"ok": True, "skipped": f"ignoring {new_status} for {old_status} order"}
+        old_status = order.get("status", "")
+        if old_status == new_status:
+            return {"ok": True, "skipped": "no_status_change"}
+        # Never let a "picked" event downgrade an order that's already further
+        # along (delivered / cancelled / refunded) — only ever move forward.
+        if new_status == "shipped" and old_status in ("delivered", "cancelled", "refunded"):
+            return {"ok": True, "skipped": f"ignoring {new_status} for {old_status} order"}
 
-    update_fields: Dict[str, Any] = {"status": new_status}
-    update_fields.update(extract_webhook_shipment_info(payload))
-    order_in = OrderUpdate(**update_fields)
+        update_fields: Dict[str, Any] = {"status": new_status}
+        update_fields.update(extract_webhook_shipment_info(payload))
+        order_in = OrderUpdate(**update_fields)
 
-    order_service = OrderService(db)
-    updated = await order_service.update(order_number, order_in)
+        order_service = OrderService(db)
+        updated = await order_service.update(order_number, order_in)
 
-    if updated:
-        csvc = CommissionService(db)
-        updated = await csvc.apply_order_status_effects(order, updated, order_in)
+        if updated:
+            csvc = CommissionService(db)
+            updated = await csvc.apply_order_status_effects(order, updated, order_in)
+    except Exception as e:
+        # Don't let a processing error permanently burn this delivery's
+        # dedupe slot — NimbusPost retries on any non-2xx, but our own
+        # dedupe check would otherwise treat that retry as a duplicate and
+        # silently drop it forever. Delete the just-inserted record so the
+        # retry actually gets a chance to reprocess, then 500 so NimbusPost
+        # knows to retry.
+        if delivery_id:
+            await db["webhook_deliveries"].delete_one(
+                {"provider": "nimbuspost", "delivery_id": delivery_id}
+            )
+        print(f"[WEBHOOK] nimbuspost processing failed (event={event}): {e!r}")
+        raise HTTPException(status_code=500, detail="Webhook processing failed") from e
+
+    if delivery_id:
+        await db["webhook_deliveries"].update_one(
+            {"provider": "nimbuspost", "delivery_id": delivery_id},
+            {"$set": {"order_id": order_number, "resolved_status": new_status}},
+        )
 
     print(f"[WEBHOOK] nimbuspost order {order_number} status -> {new_status}")
     return {"ok": True, "order_id": order_number, "status": new_status}

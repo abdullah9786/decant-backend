@@ -448,15 +448,23 @@ class NimbusPostAdapter(ShippingProviderAdapter):
 # all, the parcel has physically been picked up, regardless of whether
 # NimbusPost's order-level status has caught up yet. `tracking.updated` can
 # also report `status: "delivered"`, which we still route to "delivered".
-
+#
+# Per NimbusPost's docs, `order.updated`'s `status` is one of: booked,
+# shipped, delivered, cancelled, rto initiated (confirmed via a real prod
+# payload: booking sends `status: "booked"`, which we deliberately don't
+# map — nothing physical has happened yet at that point).
 _ORDER_UPDATED_STATUS_MAP = {
     "shipped": "shipped",
     "delivered": "delivered",
 }
 
-# Tracking-scan statuses that must NOT be treated as a "shipped" signal —
-# either a no-op for us (cancelled/rto handled elsewhere) or too ambiguous.
-_TRACKING_IGNORED_STATUSES = {"cancelled", "rto initiated", ""}
+# `tracking.updated`'s `status` is one of: created, shipped, in transit,
+# delivered, rto initiated, cancelled (per NimbusPost's docs). "created" is
+# the pre-pickup bucket — it fires the moment the shipment is scheduled/
+# booked, before the courier has touched it — so it must NOT be treated as
+# a "shipped" signal, or every order flips to "shipped" the instant you
+# create the shipment instead of when it's actually picked up.
+_TRACKING_IGNORED_STATUSES = {"created", "cancelled", "rto initiated", ""}
 
 
 def extract_webhook_order_number(payload: Dict[str, Any]) -> Optional[str]:
