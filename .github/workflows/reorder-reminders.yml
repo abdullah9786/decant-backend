@@ -17,8 +17,8 @@ name: Reorder Reminders
 
 on:
   schedule:
-    # 30 3 * * * UTC == ~9:00am IST
-    - cron: "30 3 * * *"
+    # 30 15 * * * UTC == 9:00pm IST
+    - cron: "30 15 * * *"
   workflow_dispatch:
     inputs:
       dry_run:
