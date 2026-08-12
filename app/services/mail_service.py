@@ -298,6 +298,85 @@ class MailService:
         """
         return await self._send_email(admin_email, "Admin", subject, html_body)
 
+    async def send_reorder_reminder(
+        self,
+        email: str,
+        customer_name: str,
+        order: Dict[str, Any],
+        related_products: List[Dict[str, Any]],
+    ):
+        if not email:
+            return False
+        name = customer_name or "there"
+
+        decant_items = [
+            item
+            for item in order.get("items", []) or []
+            if item.get("status") != "cancelled"
+            and not item.get("is_pack")
+            and not item.get("gift_box_id")
+            and item.get("product_type") != "set"
+        ]
+        fragrance_names = ", ".join(
+            sorted({item.get("name", "").strip() for item in decant_items if item.get("name")})
+        ) or "your fragrances"
+
+        reorder_product_id = decant_items[0].get("product_id") if decant_items else None
+        reorder_url = (
+            self._frontend_url(f"/products/{reorder_product_id}")
+            if reorder_product_id
+            else self._frontend_url("/products")
+        )
+
+        cross_sell_cards = ""
+        for product in (related_products or [])[:3]:
+            product_name = (product.get("name") or "").strip()
+            if not product_name:
+                continue
+            slug_or_id = product.get("slug") or str(product.get("_id") or "")
+            variants = product.get("variants") or []
+            decant_variants = [v for v in variants if not v.get("is_pack")]
+            price_variants = decant_variants or variants
+            price = min((v.get("price", 0) for v in price_variants), default=0)
+            image_url = product.get("image_url") or ""
+            image_html = (
+                f'<img src="{image_url}" alt="{product_name}" style="width: 100%; height: 90px; object-fit: cover; border-radius: 4px; margin-bottom: 8px;" />'
+                if image_url
+                else ""
+            )
+            price_html = f'<p style="margin: 2px 0 0; font-size: 12px; color: #059669;">From ₹{int(price)}</p>' if price else ""
+            cross_sell_cards += f"""
+            <a href="{self._frontend_url(f'/products/{slug_or_id}')}" style="display: inline-block; width: 30%; margin: 0 1.5% 10px; text-decoration: none; vertical-align: top;">
+                {image_html}
+                <p style="margin: 0; font-size: 13px; font-weight: bold; color: #022c22;">{product_name}</p>
+                {price_html}
+            </a>
+            """
+
+        cross_sell_block = ""
+        if cross_sell_cards:
+            cross_sell_block = f"""
+            <div style="margin: 25px 0;">
+                <p style="margin: 0 0 12px; font-size: 11px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.1em; color: #6b7280;">...or try something new</p>
+                <div>{cross_sell_cards}</div>
+            </div>
+            """
+
+        subject = "Running low? Time to restock your decants"
+        html_body = f"""
+        <div style="font-family: serif; color: #022c22; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #f0fdf4;">
+            <h2 style="text-transform: uppercase; letter-spacing: 0.2em; border-bottom: 2px solid #059669; padding-bottom: 10px;">Running Low?</h2>
+            <p>Hi {name},</p>
+            <p>Based on your last order, your <strong>{fragrance_names}</strong> {"is" if len(decant_items) == 1 else "are"} probably running low by now. Restock before you run out completely.</p>
+            <div style="margin: 30px 0;">
+                <a href="{reorder_url}" style="background-color: #022c22; color: white; padding: 12px 25px; text-decoration: none; font-weight: bold; text-transform: uppercase; letter-spacing: 0.1em; border-radius: 5px;">Reorder the Same</a>
+            </div>
+            {cross_sell_block}
+            <p style="font-size: 12px; color: #6b7280; margin-top: 20px;">Not ready to reorder yet? No worries — feel free to ignore this note.</p>
+        </div>
+        """
+        return await self._send_email(email, name, subject, html_body)
+
     async def send_instagram_promo_invite(
         self,
         email: str,

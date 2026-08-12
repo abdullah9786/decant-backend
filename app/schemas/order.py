@@ -101,6 +101,7 @@ class OrderBase(BaseModel):
     tracking_url: Optional[str] = None
     courier_name: Optional[str] = None
     shipped_at: Optional[datetime] = None
+    delivered_at: Optional[datetime] = None
     shipping_integrations: Optional[ShippingIntegrations] = None
 
 class OrderCreate(OrderBase):

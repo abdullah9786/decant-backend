@@ -65,6 +65,14 @@ class Settings(BaseSettings):
     NIMBUSPOST_DEFAULT_WIDTH_CM: int = int(os.getenv("NIMBUSPOST_DEFAULT_WIDTH_CM", "10"))
     NIMBUSPOST_DEFAULT_HEIGHT_CM: int = int(os.getenv("NIMBUSPOST_DEFAULT_HEIGHT_CM", "8"))
 
+    # Reorder reminder — "you're likely running low" lifecycle email.
+    # Depletion date = delivered_at + (total decant ml in the order / rate).
+    REORDER_DAILY_ML_RATE: float = float(os.getenv("REORDER_DAILY_ML_RATE", "3"))
+    REORDER_COOLDOWN_DAYS: int = int(os.getenv("REORDER_COOLDOWN_DAYS", "25"))
+    REORDER_CATCHUP_WINDOW_DAYS: int = int(os.getenv("REORDER_CATCHUP_WINDOW_DAYS", "3"))
+    REORDER_LOOKBACK_DAYS: int = int(os.getenv("REORDER_LOOKBACK_DAYS", "60"))
+    REORDER_REMINDER_CRON_SECRET: str = os.getenv("REORDER_REMINDER_CRON_SECRET", "").strip()
+
     class Config:
         case_sensitive = True
         env_file = ".env"

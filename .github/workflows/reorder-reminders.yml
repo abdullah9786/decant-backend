@@ -1,0 +1,57 @@
+name: Reorder Reminders
+
+# Daily sweep of delivered orders that hits the backend's protected
+# /reorder-reminders/run endpoint (see app/routers/reorder_reminders.py) to
+# send "you're likely running low" emails. The backend does its own
+# eligibility/cooldown/dedupe checks — this workflow is just the trigger.
+#
+# Safety: scheduled runs stay in dry-run mode (no emails sent, no DB writes)
+# until the `REORDER_REMINDERS_LIVE` repository VARIABLE (Settings -> Secrets
+# and variables -> Actions -> Variables tab, NOT Secrets) is set to the exact
+# string "true". This lets the workflow be merged/enabled immediately without
+# risking a real send on the very first scheduled tick, before anyone has
+# sanity-checked dry-run output against production data.
+#
+# Manual runs (workflow_dispatch) always respect the `dry_run` checkbox
+# regardless of the live flag, so you can dry-run-test on demand at any time.
+
+on:
+  schedule:
+    # 30 3 * * * UTC == ~9:00am IST
+    - cron: "30 3 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (compute + log eligibility, send nothing)"
+        type: boolean
+        default: true
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Determine dry_run mode
+        id: mode
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_DRY_RUN: ${{ github.event.inputs.dry_run }}
+          LIVE_FLAG: ${{ vars.REORDER_REMINDERS_LIVE }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "dry_run=${DISPATCH_DRY_RUN}" >> "$GITHUB_OUTPUT"
+          elif [ "$LIVE_FLAG" = "true" ]; then
+            echo "dry_run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "dry_run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Call reorder-reminders endpoint
+        env:
+          BACKEND_URL: ${{ secrets.BACKEND_URL }}
+          CRON_SECRET: ${{ secrets.REORDER_REMINDER_CRON_SECRET }}
+          DRY_RUN: ${{ steps.mode.outputs.dry_run }}
+        run: |
+          curl -sf -X POST \
+            "${BACKEND_URL%/}/api/v1/reorder-reminders/run?dry_run=${DRY_RUN}" \
+            -H "x-cron-secret: ${CRON_SECRET}" \
+            -w "\nHTTP %{http_code}\n"

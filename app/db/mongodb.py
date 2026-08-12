@@ -168,6 +168,21 @@ async def connect_to_mongo():
     except (DuplicateKeyError, OperationFailure) as e:
         logging.warning("Webhook deliveries indexes: %s", e)
 
+    # Reorder reminder sweep filters candidate orders by delivered_at, and
+    # dedupes/cools down per customer via reorder_reminders.customer_email.
+    try:
+        await db.db["orders"].create_index(
+            "delivered_at",
+            name="orders_delivered_at",
+        )
+        await db.db["reorder_reminders"].create_index(
+            "customer_email",
+            unique=True,
+            name="uniq_reorder_reminders_customer_email",
+        )
+    except (DuplicateKeyError, OperationFailure) as e:
+        logging.warning("Reorder reminder indexes: %s", e)
+
     print(f"\n\033[92m[SUCCESS]\033[0m Database connected: {settings.DATABASE_NAME}")
     logging.info(f"Connected to MongoDB: {settings.DATABASE_NAME}")
 

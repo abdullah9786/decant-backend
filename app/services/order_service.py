@@ -346,6 +346,16 @@ class OrderService:
                     )
 
             if new_status == "delivered" and old_status != "delivered":
+                if not updated_order.get("delivered_at"):
+                    # Reorder-reminder depletion math anchors on this — start
+                    # the "days of supply" clock from when the fragrance
+                    # actually arrived, not from when it was ordered/paid.
+                    delivered_at = datetime.now(timezone.utc)
+                    await self.collection.update_one(
+                        {"_id": ObjectId(order_id)},
+                        {"$set": {"delivered_at": delivered_at}},
+                    )
+                    updated_order["delivered_at"] = delivered_at
                 await self.mail_service.send_delivery_notification(
                     updated_order.get("customer_email"),
                     updated_order.get("customer_name"),
