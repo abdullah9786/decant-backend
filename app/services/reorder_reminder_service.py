@@ -9,6 +9,18 @@ from app.services.mail_service import MailService
 from app.services.product_service import ProductService
 
 
+def _ensure_aware(dt: datetime) -> datetime:
+    """Motor/PyMongo return naive UTC datetimes on read (no `tz_aware=True`
+    on the client), even though every write in this codebase uses
+    `datetime.now(timezone.utc)`. Comparing that naive value against a fresh
+    aware `datetime.now(timezone.utc)` raises `TypeError` — normalize here,
+    same pattern already used in auth_service/review_service/orders.py.
+    """
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 class ReorderReminderService:
     """Daily sweep: nudge customers to reorder once their decants are
 
@@ -38,6 +50,7 @@ class ReorderReminderService:
         delivered_at = order.get("delivered_at")
         if not delivered_at:
             return None
+        delivered_at = _ensure_aware(delivered_at)
 
         total_ml = 0
         for item in order.get("items", []) or []:
@@ -111,6 +124,7 @@ class ReorderReminderService:
         last_sent_at = record.get("last_sent_at")
         if not last_sent_at:
             return False
+        last_sent_at = _ensure_aware(last_sent_at)
         cooldown_ends = last_sent_at + timedelta(days=settings.REORDER_COOLDOWN_DAYS)
         return datetime.now(timezone.utc) < cooldown_ends
 
@@ -182,33 +196,39 @@ class ReorderReminderService:
         details: list[dict[str, Any]] = []
 
         for order in candidates:
-            depletion_date = self.compute_depletion_date(order)
-            if depletion_date is None:
-                skipped["no_decant_items"] = skipped.get("no_decant_items", 0) + 1
-                continue
+            try:
+                depletion_date = self.compute_depletion_date(order)
+                if depletion_date is None:
+                    skipped["no_decant_items"] = skipped.get("no_decant_items", 0) + 1
+                    continue
 
-            eligible, reason = await self.is_eligible(order, depletion_date)
-            if not eligible:
-                skipped[reason] = skipped.get(reason, 0) + 1
-                continue
+                eligible, reason = await self.is_eligible(order, depletion_date)
+                if not eligible:
+                    skipped[reason] = skipped.get(reason, 0) + 1
+                    continue
 
-            eligible_count += 1
-            entry = {
-                "order_id": str(order["_id"]),
-                "customer_email": order.get("customer_email"),
-                "depletion_date": depletion_date.isoformat(),
-            }
+                eligible_count += 1
+                entry = {
+                    "order_id": str(order["_id"]),
+                    "customer_email": order.get("customer_email"),
+                    "depletion_date": depletion_date.isoformat(),
+                }
 
-            if dry_run:
-                details.append(entry)
-                continue
+                if dry_run:
+                    details.append(entry)
+                    continue
 
-            sent = await self._send_reminder(order, depletion_date)
-            if sent:
-                sent_count += 1
-                details.append(entry)
-            else:
-                skipped["send_failed"] = skipped.get("send_failed", 0) + 1
+                sent = await self._send_reminder(order, depletion_date)
+                if sent:
+                    sent_count += 1
+                    details.append(entry)
+                else:
+                    skipped["send_failed"] = skipped.get("send_failed", 0) + 1
+            except Exception as e:
+                # One malformed/unexpected order shouldn't take down the whole
+                # sweep — log it, skip it, keep processing the rest.
+                print(f"[REORDER] order {order.get('_id')} raised during processing: {e!r}")
+                skipped["error"] = skipped.get("error", 0) + 1
 
         return {
             "checked": len(candidates),
