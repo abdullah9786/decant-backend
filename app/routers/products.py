@@ -54,8 +54,8 @@ async def bulk_update_chips(
 
 @router.get("", response_model=Union[List[ProductOut], ProductListResponse])
 async def get_products(
-    fragrance_family: Optional[str] = None,
-    brand: Optional[str] = None,
+    fragrance_family: Optional[List[str]] = Query(None),
+    brand: Optional[List[str]] = Query(None),
     is_featured: Optional[bool] = None,
     is_new_arrival: Optional[bool] = None,
     q: Optional[str] = None,

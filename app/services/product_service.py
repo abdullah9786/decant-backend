@@ -2,7 +2,7 @@ import asyncio
 import re
 import unicodedata
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import List, Optional, Union
 
 from bson import ObjectId
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -40,8 +40,8 @@ class ProductService:
 
     async def get_all(
         self,
-        fragrance_family: Optional[str] = None,
-        brand: Optional[str] = None,
+        fragrance_family: Optional[Union[str, List[str]]] = None,
+        brand: Optional[Union[str, List[str]]] = None,
         is_featured: Optional[bool] = None,
         is_new_arrival: Optional[bool] = None,
         search: Optional[str] = None,
@@ -60,16 +60,30 @@ class ProductService:
         if not include_inactive:
             query["is_active"] = {"$ne": False}
         if fragrance_family:
-            query["fragrance_family"] = fragrance_family
+            if isinstance(fragrance_family, list):
+                query["fragrance_family"] = {"$in": fragrance_family}
+            else:
+                query["fragrance_family"] = fragrance_family
         if brand:
-            query["brand"] = brand
+            if isinstance(brand, list):
+                query["brand"] = {"$in": brand}
+            else:
+                query["brand"] = brand
         if category_id:
             query["category_ids"] = category_id
         if is_featured is not None:
             query["is_featured"] = is_featured
         if is_new_arrival is not None:
             query["is_new_arrival"] = is_new_arrival
-        if product_type:
+        if product_type == "set":
+            query["product_type"] = "set"
+        elif product_type == "decant":
+            query["product_type"] = {"$ne": "set"}
+            query["variants.is_pack"] = {"$ne": True}
+        elif product_type == "full-bottle":
+            query["product_type"] = {"$ne": "set"}
+            query["variants.is_pack"] = True
+        elif product_type:
             query["product_type"] = product_type
         elif exclude_product_type:
             query["product_type"] = {"$ne": exclude_product_type}
@@ -92,6 +106,10 @@ class ProductService:
         cursor = self.collection.find(query)
         if sort_by == "newest":
             cursor = cursor.sort("created_at", -1)
+        elif sort_by == "price-asc":
+            cursor = cursor.sort("variants.price", 1)
+        elif sort_by == "price-desc":
+            cursor = cursor.sort("variants.price", -1)
         else:
             cursor = cursor.sort([("sort_order", 1), ("created_at", -1)])
 
