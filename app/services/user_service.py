@@ -1,6 +1,17 @@
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from bson import ObjectId
-from typing import List
+from typing import List, Any
+
+def convert_objectid_to_str(obj: Any) -> Any:
+    """Recursively convert ObjectId instances to strings in a document."""
+    if isinstance(obj, ObjectId):
+        return str(obj)
+    elif isinstance(obj, dict):
+        return {key: convert_objectid_to_str(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_objectid_to_str(item) for item in obj]
+    else:
+        return obj
 
 class UserService:
     def __init__(self, db: AsyncIOMotorDatabase):
@@ -13,13 +24,8 @@ class UserService:
         cursor = self.collection.find({}).skip(skip).limit(limit)
         users = await cursor.to_list(length=limit)
         
-        # Convert ObjectIds to strings for JSON serialization
-        serializable_users = []
-        for user in users:
-            user_dict = dict(user)
-            if "_id" in user_dict:
-                user_dict["_id"] = str(user_dict["_id"])
-            serializable_users.append(user_dict)
+        # Convert all ObjectIds to strings for JSON serialization
+        serializable_users = [convert_objectid_to_str(user) for user in users]
         
         return {
             "items": serializable_users,

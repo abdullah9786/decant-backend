@@ -2,7 +2,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from pymongo.errors import DuplicateKeyError
 from app.schemas.order import OrderCreate, OrderUpdate
 from bson import ObjectId
-from typing import List, Optional
+from typing import List, Optional, Any
 from datetime import datetime, timezone
 import re
 import razorpay
@@ -10,6 +10,17 @@ from app.config.config import settings
 from app.services.mail_service import MailService
 from app.services.offer_service import OfferService
 from app.services.promo_submission_service import PromoSubmissionService
+
+def convert_objectid_to_str(obj: Any) -> Any:
+    """Recursively convert ObjectId instances to strings in a document."""
+    if isinstance(obj, ObjectId):
+        return str(obj)
+    elif isinstance(obj, dict):
+        return {key: convert_objectid_to_str(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_objectid_to_str(item) for item in obj]
+    else:
+        return obj
 
 class OrderService:
     def __init__(self, db: AsyncIOMotorDatabase):
@@ -182,13 +193,8 @@ class OrderService:
         orders = await cursor.to_list(length=limit)
         orders = await self._attach_promo_to_orders(orders)
         
-        # Convert ObjectIds to strings for JSON serialization
-        serializable_orders = []
-        for order in orders:
-            order_dict = dict(order)
-            if "_id" in order_dict:
-                order_dict["_id"] = str(order_dict["_id"])
-            serializable_orders.append(order_dict)
+        # Convert all ObjectIds to strings for JSON serialization
+        serializable_orders = [convert_objectid_to_str(order) for order in orders]
         
         return {
             "items": serializable_orders,
