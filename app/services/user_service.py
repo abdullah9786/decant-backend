@@ -6,9 +6,28 @@ class UserService:
     def __init__(self, db: AsyncIOMotorDatabase):
         self.collection = db["users"]
 
-    async def get_all(self):
-        cursor = self.collection.find({})
-        return await cursor.to_list(length=100)
+    async def get_all(self, skip: int = 0, limit: int = 100):
+        # Get total count for pagination
+        total = await self.collection.count_documents({})
+        
+        cursor = self.collection.find({}).skip(skip).limit(limit)
+        users = await cursor.to_list(length=limit)
+        
+        # Convert ObjectIds to strings for JSON serialization
+        serializable_users = []
+        for user in users:
+            user_dict = dict(user)
+            if "_id" in user_dict:
+                user_dict["_id"] = str(user_dict["_id"])
+            serializable_users.append(user_dict)
+        
+        return {
+            "items": serializable_users,
+            "total": total,
+            "skip": skip,
+            "limit": limit,
+            "has_more": skip + limit < total
+        }
 
     async def get_by_id(self, user_id: str):
         return await self.collection.find_one({"_id": ObjectId(user_id)})

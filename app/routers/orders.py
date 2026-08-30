@@ -73,17 +73,19 @@ async def create_order(order_in: OrderCreate, db=Depends(get_database), current_
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-@router.get("/", response_model=List[OrderOut])
+@router.get("/")
 async def get_orders(
     user_id: Optional[str] = None,
     q: Optional[str] = None,
+    skip: int = 0,
+    limit: int = 100,
     db=Depends(get_database),
     current_user=Depends(get_current_user),
 ):
     order_service = OrderService(db)
     if current_user.get("is_admin", False):
-        return await order_service.get_all(user_id, q=q)
-    return await order_service.get_all(str(current_user["_id"]))
+        return await order_service.get_all(user_id, q=q, skip=skip, limit=limit)
+    return await order_service.get_all(str(current_user["_id"]), skip=skip, limit=limit)
 
 @router.get("/track/{id}", response_model=OrderTrackOut)
 async def track_order(id: str, db=Depends(get_database)):

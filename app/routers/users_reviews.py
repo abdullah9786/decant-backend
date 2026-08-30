@@ -40,11 +40,17 @@ user_router = APIRouter(prefix="/users", tags=["users"])
 review_router = APIRouter(prefix="/reviews", tags=["reviews"])
 
 
-@user_router.get("", response_model=List[UserListOut])
-async def get_users(db=Depends(get_database), _admin=Depends(require_admin)):
+@user_router.get("")
+async def get_users(
+    skip: int = 0,
+    limit: int = 100,
+    db=Depends(get_database),
+    _admin=Depends(require_admin)
+):
     user_service = UserService(db)
     order_service = OrderService(db)
-    users = await user_service.get_all()
+    result = await user_service.get_all(skip=skip, limit=limit)
+    users = result["items"]
     bulk_stats = await order_service.bulk_stats_for_users(users)
 
     enriched = []
@@ -56,7 +62,14 @@ async def get_users(db=Depends(get_database), _admin=Depends(require_admin)):
             "order_count": stats["order_count"],
             "order_total": stats["order_total"],
         })
-    return enriched
+    
+    return {
+        "items": enriched,
+        "total": result["total"],
+        "skip": result["skip"],
+        "limit": result["limit"],
+        "has_more": result["has_more"]
+    }
 
 
 @user_router.post("/create-admin", response_model=UserOut, status_code=status.HTTP_201_CREATED)

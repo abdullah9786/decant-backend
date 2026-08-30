@@ -166,7 +166,7 @@ class OrderService:
                 order["promo_submission"] = summary
         return orders
 
-    async def get_all(self, user_id: str = None, q: str = None):
+    async def get_all(self, user_id: str = None, q: str = None, skip: int = 0, limit: int = 100):
         query: dict = {}
         if user_id:
             query["user_id"] = user_id
@@ -175,10 +175,28 @@ class OrderService:
         if search:
             query.update(self._build_order_search_filter(search))
 
-        limit = 500 if search else 100
-        cursor = self.collection.find(query).sort("created_at", -1).limit(limit)
+        # Get total count for pagination
+        total = await self.collection.count_documents(query)
+        
+        cursor = self.collection.find(query).sort("created_at", -1).skip(skip).limit(limit)
         orders = await cursor.to_list(length=limit)
-        return await self._attach_promo_to_orders(orders)
+        orders = await self._attach_promo_to_orders(orders)
+        
+        # Convert ObjectIds to strings for JSON serialization
+        serializable_orders = []
+        for order in orders:
+            order_dict = dict(order)
+            if "_id" in order_dict:
+                order_dict["_id"] = str(order_dict["_id"])
+            serializable_orders.append(order_dict)
+        
+        return {
+            "items": serializable_orders,
+            "total": total,
+            "skip": skip,
+            "limit": limit,
+            "has_more": skip + limit < total
+        }
 
     def _build_order_search_filter(self, q: str) -> dict:
         """Match orders by customer details, tracking, or any line-item product."""
