@@ -79,7 +79,7 @@ class ProductService:
             query["product_type"] = "set"
         elif product_type == "decant":
             query["product_type"] = {"$ne": "set"}
-            query["variants.is_pack"] = {"$ne": True}
+            query["variants"] = {"$elemMatch": {"is_pack": False}}
         elif product_type == "full-bottle":
             query["product_type"] = {"$ne": "set"}
             query["variants.is_pack"] = True
